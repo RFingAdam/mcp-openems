@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-openems"
+version = "0.1.0"
+description = "OpenEMS electromagnetic simulation MCP server for AI-assisted antenna and RF design"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Adam Engelbrecht", email = "adam@rfingadam.com" }
+]
+keywords = ["mcp", "openems", "fdtd", "antenna", "electromagnetic", "simulation", "rf"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+openems = [
+    "CSXCAD",
+    "openEMS",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+mcp-openems = "mcp_openems.server:main"
+
+[project.urls]
+Homepage = "https://github.com/RFingAdam/mcp-openems"
+Repository = "https://github.com/RFingAdam/mcp-openems"
+Issues = "https://github.com/RFingAdam/mcp-openems/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_openems"]
