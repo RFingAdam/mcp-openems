@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">
+  <defs>
+    <linearGradient id="emGrad" x1="0%" y1="0%" x2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6"/>
+      <stop offset="100%" style="stop-color:#EC4899"/>
+    </linearGradient>
+  </defs>
+
+  <!-- FDTD Grid icon -->
+  <g transform="translate(15, 15)">
+    <!-- Grid lines -->
+    <line x1="5" y1="10" x2="5" y2="60" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="20" y1="10" x2="20" y2="60" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="35" y1="10" x2="35" y2="60" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="50" y1="10" x2="50" y2="60" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="65" y1="10" x2="65" y2="60" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+
+    <line x1="5" y1="10" x2="65" y2="10" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="5" y1="25" x2="65" y2="25" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="5" y1="40" x2="65" y2="40" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+    <line x1="5" y1="55" x2="65" y2="55" stroke="url(#emGrad)" stroke-width="1" opacity="0.4"/>
+
+    <!-- Antenna element (dipole) -->
+    <line x1="35" y1="18" x2="35" y2="32" stroke="url(#emGrad)" stroke-width="3" stroke-linecap="round"/>
+    <line x1="35" y1="38" x2="35" y2="52" stroke="url(#emGrad)" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="35" cy="35" r="2" fill="url(#emGrad)"/>
+
+    <!-- EM field waves -->
+    <ellipse cx="35" cy="35" rx="15" ry="8" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.6"/>
+    <ellipse cx="35" cy="35" rx="25" ry="14" fill="none" stroke="#EC4899" stroke-width="1.5" opacity="0.4"/>
+    <ellipse cx="35" cy="35" rx="35" ry="20" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.2"/>
+  </g>
+
+  <!-- Text -->
+  <text x="100" y="45" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="700" fill="#1F2937">
+    MCP OpenEMS
+  </text>
+  <text x="100" y="70" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#6B7280">
+    FDTD antenna design &amp; simulation
+  </text>
+</svg>
