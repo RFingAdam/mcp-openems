@@ -683,12 +683,14 @@ mesh.AddLine('z', np.concatenate([
 nf2ff = FDTD.CreateNF2FFBox()
 
 # Run simulation
-Sim_Path = 'Sim_Patch'
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_patch')
 if os.path.exists(Sim_Path):
     import shutil
     shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
 
-FDTD.Run(Sim_Path, verbose=3, numThreads=4)
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
 # Post-processing
 f = np.linspace(f0 - fc, f0 + fc, 201)
@@ -790,12 +792,14 @@ mesh.AddLine('z', np.concatenate([
 
 nf2ff = FDTD.CreateNF2FFBox()
 
-Sim_Path = 'Sim_Dipole'
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_dipole')
 if os.path.exists(Sim_Path):
     import shutil
     shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
 
-FDTD.Run(Sim_Path, verbose=3, numThreads=4)
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
 # Post-processing
 f = np.linspace(f0 - fc, f0 + fc, 201)
@@ -893,12 +897,14 @@ mesh.AddLine('z', np.concatenate([
 
 nf2ff = FDTD.CreateNF2FFBox()
 
-Sim_Path = 'Sim_Monopole'
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_monopole')
 if os.path.exists(Sim_Path):
     import shutil
     shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
 
-FDTD.Run(Sim_Path, verbose=3, numThreads=4)
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
 f = np.linspace(f0 - fc, f0 + fc, 201)
 port.CalcPort(Sim_Path, f)
@@ -1010,12 +1016,14 @@ mesh.AddLine('z', np.concatenate([
 
 nf2ff = FDTD.CreateNF2FFBox()
 
-Sim_Path = 'Sim_Helix'
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_helix')
 if os.path.exists(Sim_Path):
     import shutil
     shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
 
-FDTD.Run(Sim_Path, verbose=3, numThreads=4)
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
 # Post-processing
 f = np.linspace(f0 - fc, f0 + fc, 201)
@@ -1154,16 +1162,18 @@ mesh.AddLine('z', np.concatenate([
 
 nf2ff = FDTD.CreateNF2FFBox()
 
-Sim_Path = 'Sim_Horn'
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_horn')
 if os.path.exists(Sim_Path):
     import shutil
     shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
 
 print("Note: Horn simulation requires careful geometry - this is a template.")
 print("For accurate results, use AppCSXCAD to verify geometry before running.")
 
 # Uncomment to run:
-# FDTD.Run(Sim_Path, verbose=3, numThreads=4)
+# FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
 print(f"Target gain: {design["calculated"]["estimated_gain_dbi"]} dBi")
 print(f"E-plane beamwidth: {design["calculated"]["e_plane_beamwidth_deg"]}°")
