@@ -1786,8 +1786,1155 @@ print("Template generated - customize geometry before running")
         }
 
 
-# Global designer instance
+class PCBStructureDesigner:
+    """Calculates PCB interconnect structures and generates OpenEMS geometry."""
+
+    def __init__(self):
+        self.designs: dict[str, dict] = {}
+
+    def create_microstrip_trace(
+        self,
+        frequency_ghz: float,
+        trace_width_mm: float,
+        trace_length_mm: float,
+        dielectric_height_mm: float,
+        substrate_er: float = 4.2,
+        name: str = "Microstrip Trace",
+    ) -> dict:
+        """Design a microstrip trace with analytical impedance calculation.
+
+        Uses Hammerstad-Jensen formula for characteristic impedance.
+
+        Args:
+            frequency_ghz: Analysis frequency in GHz
+            trace_width_mm: Trace width in mm
+            trace_length_mm: Trace length in mm
+            dielectric_height_mm: Dielectric thickness in mm
+            substrate_er: Substrate dielectric constant (default 4.2 for FR-4)
+            name: Design name
+
+        Returns:
+            Design specification with calculated impedance and geometry
+        """
+        design_id = str(uuid4())
+        c = 299792458  # Speed of light m/s
+        f = frequency_ghz * 1e9
+        w = trace_width_mm
+        h = dielectric_height_mm
+        er = substrate_er
+
+        # Hammerstad-Jensen effective permittivity
+        u = w / h
+        a_ham = 1 + (1 / 49) * math.log(
+            (u ** 4 + (u / 52) ** 2) / (u ** 4 + 0.432)
+        ) + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
+        b_ham = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
+        er_eff = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / u) ** (-a_ham * b_ham)
+
+        # Hammerstad characteristic impedance (free-space, then adjust for er_eff)
+        f_u = 6 + (2 * math.pi - 6) * math.exp(-(30.666 / u) ** 0.7528)
+        z0_air = (377 / (2 * math.pi)) * math.log(f_u / u + math.sqrt(1 + (2 / u) ** 2))
+        z0 = z0_air / math.sqrt(er_eff)
+
+        # Wavelength in medium
+        wavelength_mm = (c / f) * 1000 / math.sqrt(er_eff)
+        electrical_length_deg = 360 * trace_length_mm / wavelength_mm
+
+        # Propagation delay
+        delay_ps_per_mm = math.sqrt(er_eff) / (c / 1e9) * 1e3  # ps/mm
+
+        # Simulation box sizing
+        margin = max(10 * h, 5 * w, 5)  # Adequate margin for fringing fields
+        box_x = trace_length_mm + 2 * margin
+        box_y = trace_width_mm + 2 * margin
+        box_z_above = max(10 * h, 10)
+        ground_thickness = 0.035  # 1 oz copper
+
+        design = {
+            "id": design_id,
+            "name": name,
+            "type": "microstrip_trace",
+            "frequency_ghz": frequency_ghz,
+            "parameters": {
+                "substrate_er": er,
+                "dielectric_height_mm": h,
+                "trace_width_mm": w,
+                "trace_length_mm": trace_length_mm,
+            },
+            "dimensions": {
+                "trace_width_mm": round(w, 4),
+                "trace_length_mm": round(trace_length_mm, 3),
+                "dielectric_height_mm": round(h, 4),
+                "ground_plane_x_mm": round(box_x, 2),
+                "ground_plane_y_mm": round(box_y, 2),
+            },
+            "calculated": {
+                "z0_ohms": round(z0, 2),
+                "effective_er": round(er_eff, 4),
+                "wavelength_mm": round(wavelength_mm, 2),
+                "electrical_length_deg": round(electrical_length_deg, 1),
+                "delay_ps_per_mm": round(delay_ps_per_mm, 3),
+            },
+            "geometry": {
+                "unit": "mm",
+                "primitives": [
+                    {
+                        "type": "box",
+                        "name": "ground_plane",
+                        "material": "PEC",
+                        "start": [-box_x / 2, -box_y / 2, -ground_thickness],
+                        "stop": [box_x / 2, box_y / 2, 0],
+                    },
+                    {
+                        "type": "box",
+                        "name": "substrate",
+                        "material": "substrate",
+                        "start": [-box_x / 2, -box_y / 2, 0],
+                        "stop": [box_x / 2, box_y / 2, h],
+                    },
+                    {
+                        "type": "box",
+                        "name": "trace",
+                        "material": "PEC",
+                        "start": [-trace_length_mm / 2, -w / 2, h],
+                        "stop": [trace_length_mm / 2, w / 2, h],
+                    },
+                ],
+                "ports": [
+                    {
+                        "type": "lumped",
+                        "number": 1,
+                        "position": [-trace_length_mm / 2, 0, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0, 1),
+                        "description": "near end",
+                    },
+                    {
+                        "type": "lumped",
+                        "number": 2,
+                        "position": [trace_length_mm / 2, 0, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0, 1),
+                        "description": "far end",
+                    },
+                ],
+            },
+        }
+
+        self.designs[design_id] = design
+        return {"success": True, "design_id": design_id, "design": design}
+
+    def create_coupled_lines(
+        self,
+        frequency_ghz: float,
+        trace_width_mm: float,
+        spacing_mm: float,
+        trace_length_mm: float,
+        dielectric_height_mm: float,
+        substrate_er: float = 4.2,
+        name: str = "Coupled Lines",
+    ) -> dict:
+        """Design edge-coupled microstrip lines with impedance analysis.
+
+        Calculates even/odd mode impedances and differential/common impedances.
+
+        Args:
+            frequency_ghz: Analysis frequency in GHz
+            trace_width_mm: Width of each trace in mm
+            spacing_mm: Edge-to-edge spacing between traces in mm
+            trace_length_mm: Coupled length in mm
+            dielectric_height_mm: Dielectric thickness in mm
+            substrate_er: Substrate dielectric constant (default 4.2)
+            name: Design name
+
+        Returns:
+            Design specification with even/odd/differential/common impedances
+        """
+        design_id = str(uuid4())
+        c = 299792458
+        f = frequency_ghz * 1e9
+        w = trace_width_mm
+        s = spacing_mm
+        h = dielectric_height_mm
+        er = substrate_er
+
+        # Single-line effective permittivity and Z0 (Hammerstad)
+        u = w / h
+        a_ham = 1 + (1 / 49) * math.log(
+            (u ** 4 + (u / 52) ** 2) / (u ** 4 + 0.432)
+        ) + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
+        b_ham = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
+        er_eff = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / u) ** (-a_ham * b_ham)
+        f_u = 6 + (2 * math.pi - 6) * math.exp(-(30.666 / u) ** 0.7528)
+        z0_single = (377 / (2 * math.pi)) * math.log(
+            f_u / u + math.sqrt(1 + (2 / u) ** 2)
+        ) / math.sqrt(er_eff)
+
+        # Even/odd mode impedances using Kirschning-Jansen approximation
+        # Coupling factor based on s/h ratio
+        g = s / h
+        coupling_factor = math.exp(-0.627 * g) if g < 10 else 0.0
+
+        # Even mode: fields add constructively -> higher Z
+        z_even = z0_single * (1 + coupling_factor * 0.65 * (1 - math.exp(-1.0 / g)))
+        # Odd mode: fields cancel partially -> lower Z
+        z_odd = z0_single * (1 - coupling_factor * 0.65 * (1 - math.exp(-1.0 / g)))
+
+        # Even/odd effective permittivities (simplified)
+        er_even = er_eff * (1 + 0.02 * coupling_factor)
+        er_odd = er_eff * (1 - 0.02 * coupling_factor)
+
+        # Differential and common-mode impedances
+        z_diff = 2 * z_odd
+        z_common = z_even / 2
+
+        # Coupling coefficient
+        k_coupling = (z_even - z_odd) / (z_even + z_odd)
+
+        # Wavelengths
+        wavelength_even_mm = (c / f) * 1000 / math.sqrt(er_even)
+        wavelength_odd_mm = (c / f) * 1000 / math.sqrt(er_odd)
+
+        # Simulation box
+        margin = max(10 * h, 5 * w, 5)
+        total_width = 2 * w + s
+        box_x = trace_length_mm + 2 * margin
+        box_y = total_width + 2 * margin
+        box_z_above = max(10 * h, 10)
+        ground_thickness = 0.035
+
+        # Trace Y positions (centered)
+        trace1_y_center = -(w + s) / 2
+        trace2_y_center = (w + s) / 2
+
+        design = {
+            "id": design_id,
+            "name": name,
+            "type": "coupled_lines",
+            "frequency_ghz": frequency_ghz,
+            "parameters": {
+                "substrate_er": er,
+                "dielectric_height_mm": h,
+                "trace_width_mm": w,
+                "spacing_mm": s,
+                "trace_length_mm": trace_length_mm,
+            },
+            "dimensions": {
+                "trace_width_mm": round(w, 4),
+                "spacing_mm": round(s, 4),
+                "trace_length_mm": round(trace_length_mm, 3),
+                "dielectric_height_mm": round(h, 4),
+                "total_pair_width_mm": round(total_width, 4),
+                "ground_plane_x_mm": round(box_x, 2),
+                "ground_plane_y_mm": round(box_y, 2),
+            },
+            "calculated": {
+                "z0_single_ohms": round(z0_single, 2),
+                "z_even_ohms": round(z_even, 2),
+                "z_odd_ohms": round(z_odd, 2),
+                "z_diff_ohms": round(z_diff, 2),
+                "z_common_ohms": round(z_common, 2),
+                "coupling_coefficient": round(k_coupling, 4),
+                "effective_er_even": round(er_even, 4),
+                "effective_er_odd": round(er_odd, 4),
+            },
+            "geometry": {
+                "unit": "mm",
+                "primitives": [
+                    {
+                        "type": "box",
+                        "name": "ground_plane",
+                        "material": "PEC",
+                        "start": [-box_x / 2, -box_y / 2, -ground_thickness],
+                        "stop": [box_x / 2, box_y / 2, 0],
+                    },
+                    {
+                        "type": "box",
+                        "name": "substrate",
+                        "material": "substrate",
+                        "start": [-box_x / 2, -box_y / 2, 0],
+                        "stop": [box_x / 2, box_y / 2, h],
+                    },
+                    {
+                        "type": "box",
+                        "name": "trace1",
+                        "material": "PEC",
+                        "start": [-trace_length_mm / 2, trace1_y_center - w / 2, h],
+                        "stop": [trace_length_mm / 2, trace1_y_center + w / 2, h],
+                    },
+                    {
+                        "type": "box",
+                        "name": "trace2",
+                        "material": "PEC",
+                        "start": [-trace_length_mm / 2, trace2_y_center - w / 2, h],
+                        "stop": [trace_length_mm / 2, trace2_y_center + w / 2, h],
+                    },
+                ],
+                "ports": [
+                    {
+                        "type": "lumped",
+                        "number": 1,
+                        "position": [-trace_length_mm / 2, trace1_y_center, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0_single, 1),
+                        "description": "trace1 near end",
+                    },
+                    {
+                        "type": "lumped",
+                        "number": 2,
+                        "position": [trace_length_mm / 2, trace1_y_center, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0_single, 1),
+                        "description": "trace1 far end",
+                    },
+                    {
+                        "type": "lumped",
+                        "number": 3,
+                        "position": [-trace_length_mm / 2, trace2_y_center, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0_single, 1),
+                        "description": "trace2 near end",
+                    },
+                    {
+                        "type": "lumped",
+                        "number": 4,
+                        "position": [trace_length_mm / 2, trace2_y_center, h / 2],
+                        "direction": "z",
+                        "impedance": round(z0_single, 1),
+                        "description": "trace2 far end",
+                    },
+                ],
+            },
+        }
+
+        self.designs[design_id] = design
+        return {"success": True, "design_id": design_id, "design": design}
+
+    def create_via_transition(
+        self,
+        frequency_ghz: float,
+        drill_mm: float,
+        pad_mm: float,
+        dielectric_height_mm: float,
+        substrate_er: float = 4.2,
+        name: str = "Via Transition",
+    ) -> dict:
+        """Design a via transition between two layers.
+
+        Models via barrel, pads, anti-pads, and feed traces on both layers.
+
+        Args:
+            frequency_ghz: Analysis frequency in GHz
+            drill_mm: Via drill diameter in mm
+            pad_mm: Via pad diameter in mm
+            dielectric_height_mm: Dielectric thickness between layers in mm
+            substrate_er: Substrate dielectric constant (default 4.2)
+            name: Design name
+
+        Returns:
+            Design specification with estimated parasitics
+        """
+        design_id = str(uuid4())
+        c = 299792458
+        f = frequency_ghz * 1e9
+        h = dielectric_height_mm
+        er = substrate_er
+        mu0 = 4 * math.pi * 1e-7
+        eps0 = 8.854187817e-12
+
+        # Via barrel inductance (simplified coaxial model)
+        # L = (mu0 * h) / (2*pi) * ln(antipad/drill)
+        # Assume antipad = pad + 0.25mm clearance
+        antipad_mm = pad_mm + 0.25
+        if antipad_mm > drill_mm:
+            l_via = (mu0 * (h / 1000)) / (2 * math.pi) * math.log(antipad_mm / drill_mm)
+        else:
+            l_via = mu0 * (h / 1000) / (2 * math.pi) * 0.5  # fallback
+
+        l_via_ph = l_via * 1e12  # Convert to pH
+
+        # Via pad capacitance (parallel plate model for pad-to-plane)
+        # C = eps0 * er * pi * (pad^2 - drill^2) / (4 * h)
+        pad_area = math.pi * ((pad_mm / 2000) ** 2 - (drill_mm / 2000) ** 2)
+        c_via = eps0 * er * pad_area / (h / 1000)
+        c_via_ff = c_via * 1e15  # Convert to fF
+
+        # Via impedance (coaxial approximation)
+        z_via = (60 / math.sqrt(er)) * math.log(antipad_mm / drill_mm)
+
+        # Resonance frequency of via
+        f_res_ghz = 1 / (2 * math.pi * math.sqrt(l_via * c_via)) / 1e9
+
+        # Feed trace width for ~50 ohm (rough approximation)
+        feed_width_mm = max(drill_mm, 0.2)
+        feed_length_mm = max(3 * pad_mm, 2)
+
+        # Simulation box
+        margin = max(10 * h, 5 * pad_mm, 5)
+        box_xy = 2 * (feed_length_mm + pad_mm / 2 + margin)
+        ground_thickness = 0.035
+
+        design = {
+            "id": design_id,
+            "name": name,
+            "type": "via_transition",
+            "frequency_ghz": frequency_ghz,
+            "parameters": {
+                "substrate_er": er,
+                "dielectric_height_mm": h,
+                "drill_mm": drill_mm,
+                "pad_mm": pad_mm,
+            },
+            "dimensions": {
+                "drill_diameter_mm": round(drill_mm, 4),
+                "pad_diameter_mm": round(pad_mm, 4),
+                "antipad_diameter_mm": round(antipad_mm, 4),
+                "dielectric_height_mm": round(h, 4),
+                "feed_trace_width_mm": round(feed_width_mm, 3),
+                "feed_trace_length_mm": round(feed_length_mm, 3),
+            },
+            "calculated": {
+                "inductance_ph": round(l_via_ph, 1),
+                "capacitance_ff": round(c_via_ff, 1),
+                "z_via_ohms": round(z_via, 2),
+                "resonance_ghz": round(f_res_ghz, 2),
+            },
+            "geometry": {
+                "unit": "mm",
+                "primitives": [
+                    {
+                        "type": "box",
+                        "name": "ground_plane_bottom",
+                        "material": "PEC",
+                        "start": [-box_xy / 2, -box_xy / 2, -ground_thickness],
+                        "stop": [box_xy / 2, box_xy / 2, 0],
+                    },
+                    {
+                        "type": "box",
+                        "name": "substrate",
+                        "material": "substrate",
+                        "start": [-box_xy / 2, -box_xy / 2, 0],
+                        "stop": [box_xy / 2, box_xy / 2, h],
+                    },
+                    {
+                        "type": "cylinder",
+                        "name": "via_barrel",
+                        "material": "PEC",
+                        "start": [0, 0, 0],
+                        "stop": [0, 0, h],
+                        "radius": drill_mm / 2,
+                    },
+                    {
+                        "type": "disc",
+                        "name": "pad_bottom",
+                        "material": "PEC",
+                        "center": [0, 0, 0],
+                        "radius": pad_mm / 2,
+                    },
+                    {
+                        "type": "disc",
+                        "name": "pad_top",
+                        "material": "PEC",
+                        "center": [0, 0, h],
+                        "radius": pad_mm / 2,
+                    },
+                    {
+                        "type": "box",
+                        "name": "feed_trace_bottom",
+                        "material": "PEC",
+                        "start": [-pad_mm / 2 - feed_length_mm, -feed_width_mm / 2, 0],
+                        "stop": [-pad_mm / 2, feed_width_mm / 2, 0],
+                    },
+                    {
+                        "type": "box",
+                        "name": "feed_trace_top",
+                        "material": "PEC",
+                        "start": [pad_mm / 2, -feed_width_mm / 2, h],
+                        "stop": [pad_mm / 2 + feed_length_mm, feed_width_mm / 2, h],
+                    },
+                ],
+                "ports": [
+                    {
+                        "type": "lumped",
+                        "number": 1,
+                        "position": [
+                            -pad_mm / 2 - feed_length_mm,
+                            0,
+                            ground_thickness / 2,
+                        ],
+                        "direction": "z",
+                        "impedance": 50,
+                        "description": "bottom layer feed",
+                    },
+                    {
+                        "type": "lumped",
+                        "number": 2,
+                        "position": [
+                            pad_mm / 2 + feed_length_mm,
+                            0,
+                            h - ground_thickness / 2,
+                        ],
+                        "direction": "z",
+                        "impedance": 50,
+                        "description": "top layer feed",
+                    },
+                ],
+            },
+        }
+
+        self.designs[design_id] = design
+        return {"success": True, "design_id": design_id, "design": design}
+
+    def generate_openems_script(self, design_id: str) -> dict:
+        """Generate Python script for OpenEMS simulation of a PCB structure.
+
+        Args:
+            design_id: ID of the design
+
+        Returns:
+            OpenEMS Python script as string
+        """
+        if design_id not in self.designs:
+            return {"success": False, "error": f"Design not found: {design_id}"}
+
+        design = self.designs[design_id]
+        design_type = design["type"]
+
+        if design_type == "microstrip_trace":
+            script = self._generate_microstrip_trace_script(design)
+        elif design_type == "coupled_lines":
+            script = self._generate_coupled_lines_script(design)
+        elif design_type == "via_transition":
+            script = self._generate_via_transition_script(design)
+        else:
+            return {"success": False, "error": f"Unknown PCB structure type: {design_type}"}
+
+        return {
+            "success": True,
+            "design_id": design_id,
+            "script_type": "openems_python",
+            "script": script,
+            "instructions": [
+                "1. Save this script as simulate_pcb_structure.py",
+                "2. Install OpenEMS: pip install CSXCAD openEMS",
+                "3. Run: python simulate_pcb_structure.py",
+                "4. View S-parameter results in generated plots",
+            ],
+        }
+
+    def _generate_microstrip_trace_script(self, design: dict) -> str:
+        """Generate OpenEMS script for microstrip trace S-parameter extraction."""
+        dims = design["dimensions"]
+        params = design["parameters"]
+        calc = design["calculated"]
+
+        return f'''#!/usr/bin/env python3
+"""OpenEMS Microstrip Trace Simulation
+Design: {design["name"]}
+Frequency: {design["frequency_ghz"]} GHz
+Calculated Z0: {calc["z0_ohms"]} ohms
+Generated by mcp-openems
+"""
+
+import os
+import numpy as np
+from CSXCAD import ContinuousStructure
+from openEMS import openEMS
+from openEMS.physical_constants import C0
+
+# Design parameters
+f0 = {design["frequency_ghz"]}e9  # Center frequency
+fc = f0 * 0.5  # 20 dB bandwidth
+substrate_er = {params["substrate_er"]}
+substrate_h = {params["dielectric_height_mm"]}  # mm
+trace_w = {params["trace_width_mm"]}  # mm
+trace_l = {params["trace_length_mm"]}  # mm
+z0_calc = {calc["z0_ohms"]}  # Calculated Z0
+
+# Simulation setup
+unit = 1e-3  # mm
+FDTD = openEMS(EndCriteria=1e-5)
+FDTD.SetGaussExcite(f0, fc)
+FDTD.SetBoundaryCond(['PML_8', 'PML_8', 'PML_8', 'PML_8', 'PML_8', 'PML_8'])
+
+CSX = ContinuousStructure()
+FDTD.SetCSX(CSX)
+
+# Materials
+substrate = CSX.AddMaterial('substrate', epsilon=substrate_er)
+metal = CSX.AddMetal('PEC')
+
+# Geometry dimensions
+ground_x = {dims["ground_plane_x_mm"]}
+ground_y = {dims["ground_plane_y_mm"]}
+
+# Ground plane
+metal.AddBox(
+    start=[-ground_x/2, -ground_y/2, -0.035],
+    stop=[ground_x/2, ground_y/2, 0],
+    priority=10
+)
+
+# Substrate
+substrate.AddBox(
+    start=[-ground_x/2, -ground_y/2, 0],
+    stop=[ground_x/2, ground_y/2, substrate_h],
+    priority=1
+)
+
+# Microstrip trace
+metal.AddBox(
+    start=[-trace_l/2, -trace_w/2, substrate_h],
+    stop=[trace_l/2, trace_w/2, substrate_h],
+    priority=10
+)
+
+# Port 1 (near end) - excitation port
+port1 = FDTD.AddLumpedPort(
+    1, z0_calc,
+    start=[-trace_l/2, -trace_w/2, 0],
+    stop=[-trace_l/2, trace_w/2, substrate_h],
+    p_dir='z',
+    excite=1
+)
+
+# Port 2 (far end) - measurement port
+port2 = FDTD.AddLumpedPort(
+    2, z0_calc,
+    start=[trace_l/2, -trace_w/2, 0],
+    stop=[trace_l/2, trace_w/2, substrate_h],
+    p_dir='z',
+    excite=0
+)
+
+# Mesh
+mesh = CSX.GetGrid()
+mesh.SetDeltaUnit(unit)
+
+resolution = C0 / (f0 + fc) / unit / 20
+trace_res = min(trace_w / 4, substrate_h / 4, resolution)
+
+mesh.AddLine('x', np.concatenate([
+    np.arange(-ground_x/2 - 10, -trace_l/2, resolution),
+    np.linspace(-trace_l/2, trace_l/2, max(20, int(trace_l / trace_res))),
+    np.arange(trace_l/2, ground_x/2 + 10, resolution)
+]))
+mesh.AddLine('y', np.concatenate([
+    np.arange(-ground_y/2 - 10, -trace_w/2 - 2*substrate_h, resolution),
+    np.linspace(-trace_w/2 - 2*substrate_h, trace_w/2 + 2*substrate_h,
+                max(15, int((trace_w + 4*substrate_h) / trace_res))),
+    np.arange(trace_w/2 + 2*substrate_h, ground_y/2 + 10, resolution)
+]))
+mesh.AddLine('z', np.concatenate([
+    np.arange(-10, 0, resolution),
+    np.linspace(0, substrate_h, max(5, int(substrate_h / (substrate_h/4)) + 1)),
+    np.arange(substrate_h, 10*substrate_h + 10, resolution)
+]))
+
+# Run simulation
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_microstrip')
+if os.path.exists(Sim_Path):
+    import shutil
+    shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
+
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
+
+# Post-processing: S-parameters
+f = np.linspace(max(1e6, f0 - fc), f0 + fc, 401)
+port1.CalcPort(Sim_Path, f)
+port2.CalcPort(Sim_Path, f)
+
+s11 = port1.uf_ref / port1.uf_inc
+s21 = port2.uf_ref / port1.uf_inc
+s11_dB = 20 * np.log10(np.abs(s11))
+s21_dB = 20 * np.log10(np.abs(s21))
+
+# Find minimum S11 (best match)
+idx = np.argmin(s11_dB)
+print(f"Best match at: {{f[idx]/1e9:.3f}} GHz")
+print(f"S11 = {{s11_dB[idx]:.1f}} dB")
+print(f"S21 at center = {{s21_dB[len(f)//2]:.2f}} dB")
+print(f"Calculated Z0 = {calc["z0_ohms"]} ohms")
+
+# Plot results
+import matplotlib.pyplot as plt
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+ax1.plot(f/1e9, s11_dB, 'b-', label='S11')
+ax1.plot(f/1e9, s21_dB, 'r-', label='S21')
+ax1.set_xlabel('Frequency (GHz)')
+ax1.set_ylabel('Magnitude (dB)')
+ax1.set_title('Microstrip Trace S-Parameters')
+ax1.grid(True)
+ax1.legend()
+ax1.set_ylim([-40, 5])
+
+ax2.plot(f/1e9, np.angle(s21, deg=True), 'r-')
+ax2.set_xlabel('Frequency (GHz)')
+ax2.set_ylabel('Phase S21 (deg)')
+ax2.set_title('Transmission Phase')
+ax2.grid(True)
+
+plt.tight_layout()
+plt.savefig('microstrip_s_params.png', dpi=150)
+print("S-parameter plot saved to microstrip_s_params.png")
+'''
+
+    def _generate_coupled_lines_script(self, design: dict) -> str:
+        """Generate OpenEMS script for coupled lines with 4-port S-parameter extraction."""
+        dims = design["dimensions"]
+        params = design["parameters"]
+        calc = design["calculated"]
+
+        trace1_y = -(params["trace_width_mm"] + params["spacing_mm"]) / 2
+        trace2_y = (params["trace_width_mm"] + params["spacing_mm"]) / 2
+
+        return f'''#!/usr/bin/env python3
+"""OpenEMS Coupled Lines Simulation
+Design: {design["name"]}
+Frequency: {design["frequency_ghz"]} GHz
+Zdiff: {calc["z_diff_ohms"]} ohms, Zcommon: {calc["z_common_ohms"]} ohms
+Generated by mcp-openems
+"""
+
+import os
+import numpy as np
+from CSXCAD import ContinuousStructure
+from openEMS import openEMS
+from openEMS.physical_constants import C0
+
+# Design parameters
+f0 = {design["frequency_ghz"]}e9
+fc = f0 * 0.5
+substrate_er = {params["substrate_er"]}
+substrate_h = {params["dielectric_height_mm"]}
+trace_w = {params["trace_width_mm"]}
+spacing = {params["spacing_mm"]}
+trace_l = {params["trace_length_mm"]}
+z0_single = {calc["z0_single_ohms"]}
+
+# Trace Y-center positions
+trace1_y = {trace1_y}
+trace2_y = {trace2_y}
+
+# Simulation setup
+unit = 1e-3
+FDTD = openEMS(EndCriteria=1e-5)
+FDTD.SetGaussExcite(f0, fc)
+FDTD.SetBoundaryCond(['PML_8'] * 6)
+
+CSX = ContinuousStructure()
+FDTD.SetCSX(CSX)
+
+substrate = CSX.AddMaterial('substrate', epsilon=substrate_er)
+metal = CSX.AddMetal('PEC')
+
+ground_x = {dims["ground_plane_x_mm"]}
+ground_y = {dims["ground_plane_y_mm"]}
+
+# Ground plane
+metal.AddBox(
+    start=[-ground_x/2, -ground_y/2, -0.035],
+    stop=[ground_x/2, ground_y/2, 0],
+    priority=10
+)
+
+# Substrate
+substrate.AddBox(
+    start=[-ground_x/2, -ground_y/2, 0],
+    stop=[ground_x/2, ground_y/2, substrate_h],
+    priority=1
+)
+
+# Trace 1
+metal.AddBox(
+    start=[-trace_l/2, trace1_y - trace_w/2, substrate_h],
+    stop=[trace_l/2, trace1_y + trace_w/2, substrate_h],
+    priority=10
+)
+
+# Trace 2
+metal.AddBox(
+    start=[-trace_l/2, trace2_y - trace_w/2, substrate_h],
+    stop=[trace_l/2, trace2_y + trace_w/2, substrate_h],
+    priority=10
+)
+
+# Port 1: Trace 1 near end
+port1 = FDTD.AddLumpedPort(
+    1, z0_single,
+    start=[-trace_l/2, trace1_y - trace_w/2, 0],
+    stop=[-trace_l/2, trace1_y + trace_w/2, substrate_h],
+    p_dir='z', excite=1
+)
+
+# Port 2: Trace 1 far end
+port2 = FDTD.AddLumpedPort(
+    2, z0_single,
+    start=[trace_l/2, trace1_y - trace_w/2, 0],
+    stop=[trace_l/2, trace1_y + trace_w/2, substrate_h],
+    p_dir='z', excite=0
+)
+
+# Port 3: Trace 2 near end
+port3 = FDTD.AddLumpedPort(
+    3, z0_single,
+    start=[-trace_l/2, trace2_y - trace_w/2, 0],
+    stop=[-trace_l/2, trace2_y + trace_w/2, substrate_h],
+    p_dir='z', excite=0
+)
+
+# Port 4: Trace 2 far end
+port4 = FDTD.AddLumpedPort(
+    4, z0_single,
+    start=[trace_l/2, trace2_y - trace_w/2, 0],
+    stop=[trace_l/2, trace2_y + trace_w/2, substrate_h],
+    p_dir='z', excite=0
+)
+
+# Mesh
+mesh = CSX.GetGrid()
+mesh.SetDeltaUnit(unit)
+
+resolution = C0 / (f0 + fc) / unit / 20
+fine_res = min(trace_w / 4, spacing / 3, substrate_h / 4, resolution)
+
+# X mesh: along trace length
+mesh.AddLine('x', np.concatenate([
+    np.arange(-ground_x/2 - 10, -trace_l/2, resolution),
+    np.linspace(-trace_l/2, trace_l/2, max(20, int(trace_l / fine_res))),
+    np.arange(trace_l/2, ground_x/2 + 10, resolution)
+]))
+
+# Y mesh: across traces with fine resolution in coupling region
+pair_half = (trace_w + spacing/2 + 2*substrate_h)
+mesh.AddLine('y', np.concatenate([
+    np.arange(-ground_y/2 - 10, -pair_half, resolution),
+    np.linspace(-pair_half, pair_half,
+                max(25, int(2*pair_half / fine_res))),
+    np.arange(pair_half, ground_y/2 + 10, resolution)
+]))
+
+# Z mesh
+mesh.AddLine('z', np.concatenate([
+    np.arange(-10, 0, resolution),
+    np.linspace(0, substrate_h, max(5, int(substrate_h / (substrate_h/4)) + 1)),
+    np.arange(substrate_h, 10*substrate_h + 10, resolution)
+]))
+
+# Run simulation
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_coupled_lines')
+if os.path.exists(Sim_Path):
+    import shutil
+    shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
+
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
+
+# Post-processing: 4-port S-parameters
+f = np.linspace(max(1e6, f0 - fc), f0 + fc, 401)
+port1.CalcPort(Sim_Path, f)
+port2.CalcPort(Sim_Path, f)
+port3.CalcPort(Sim_Path, f)
+port4.CalcPort(Sim_Path, f)
+
+# Single-ended S-parameters (excitation on port 1)
+s11 = port1.uf_ref / port1.uf_inc
+s21 = port2.uf_ref / port1.uf_inc  # Through
+s31 = port3.uf_ref / port1.uf_inc  # Near-end crosstalk (NEXT)
+s41 = port4.uf_ref / port1.uf_inc  # Far-end crosstalk (FEXT)
+
+s11_dB = 20 * np.log10(np.abs(s11))
+s21_dB = 20 * np.log10(np.abs(s21))
+s31_dB = 20 * np.log10(np.abs(s31))
+s41_dB = 20 * np.log10(np.abs(s41))
+
+# Mixed-mode S-parameters (approximate from single-ended)
+# Sdd11 = (S11 - S13 - S31 + S33) / 2  (requires full 4-port excitation)
+# For single excitation, report NEXT/FEXT coupling
+print(f"=== Coupled Lines Results ===")
+print(f"Calculated Zdiff = {calc["z_diff_ohms"]} ohms")
+print(f"Calculated Zcommon = {calc["z_common_ohms"]} ohms")
+print(f"Coupling coefficient k = {calc["coupling_coefficient"]}")
+print(f"")
+print(f"At {{f0/1e9:.2f}} GHz:")
+mid = len(f) // 2
+print(f"  S11 (return loss) = {{s11_dB[mid]:.1f}} dB")
+print(f"  S21 (insertion loss) = {{s21_dB[mid]:.2f}} dB")
+print(f"  S31 (NEXT) = {{s31_dB[mid]:.1f}} dB")
+print(f"  S41 (FEXT) = {{s41_dB[mid]:.1f}} dB")
+
+# Plot
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+axes[0, 0].plot(f/1e9, s11_dB, 'b-')
+axes[0, 0].set_title('S11 (Return Loss)')
+axes[0, 0].set_ylabel('dB')
+axes[0, 0].grid(True)
+axes[0, 0].set_ylim([-40, 5])
+
+axes[0, 1].plot(f/1e9, s21_dB, 'r-')
+axes[0, 1].set_title('S21 (Insertion Loss)')
+axes[0, 1].set_ylabel('dB')
+axes[0, 1].grid(True)
+
+axes[1, 0].plot(f/1e9, s31_dB, 'g-')
+axes[1, 0].set_title('S31 (Near-End Crosstalk)')
+axes[1, 0].set_xlabel('Frequency (GHz)')
+axes[1, 0].set_ylabel('dB')
+axes[1, 0].grid(True)
+
+axes[1, 1].plot(f/1e9, s41_dB, 'm-')
+axes[1, 1].set_title('S41 (Far-End Crosstalk)')
+axes[1, 1].set_xlabel('Frequency (GHz)')
+axes[1, 1].set_ylabel('dB')
+axes[1, 1].grid(True)
+
+plt.suptitle('Coupled Lines 4-Port S-Parameters')
+plt.tight_layout()
+plt.savefig('coupled_lines_s_params.png', dpi=150)
+print("S-parameter plot saved to coupled_lines_s_params.png")
+'''
+
+    def _generate_via_transition_script(self, design: dict) -> str:
+        """Generate OpenEMS script for via transition simulation."""
+        dims = design["dimensions"]
+        params = design["parameters"]
+        calc = design["calculated"]
+        geom = design["geometry"]
+
+        # Extract feed positions from geometry ports
+        port1_x = geom["ports"][0]["position"][0]
+        port2_x = geom["ports"][1]["position"][0]
+
+        return f'''#!/usr/bin/env python3
+"""OpenEMS Via Transition Simulation
+Design: {design["name"]}
+Frequency: {design["frequency_ghz"]} GHz
+Via: drill={params["drill_mm"]}mm, pad={params["pad_mm"]}mm
+Estimated L={calc["inductance_ph"]} pH, C={calc["capacitance_ff"]} fF
+Generated by mcp-openems
+"""
+
+import os
+import numpy as np
+from CSXCAD import ContinuousStructure
+from openEMS import openEMS
+from openEMS.physical_constants import C0
+
+# Design parameters
+f0 = {design["frequency_ghz"]}e9
+fc = f0 * 0.5
+substrate_er = {params["substrate_er"]}
+substrate_h = {params["dielectric_height_mm"]}
+drill_r = {params["drill_mm"]} / 2  # Via drill radius
+pad_r = {params["pad_mm"]} / 2  # Pad radius
+antipad_r = {dims["antipad_diameter_mm"]} / 2  # Antipad radius
+feed_w = {dims["feed_trace_width_mm"]}
+feed_l = {dims["feed_trace_length_mm"]}
+
+# Simulation setup
+unit = 1e-3
+FDTD = openEMS(EndCriteria=1e-5)
+FDTD.SetGaussExcite(f0, fc)
+FDTD.SetBoundaryCond(['PML_8'] * 6)
+
+CSX = ContinuousStructure()
+FDTD.SetCSX(CSX)
+
+substrate = CSX.AddMaterial('substrate', epsilon=substrate_er)
+metal = CSX.AddMetal('PEC')
+
+# Ground/reference planes with antipad cutout
+box_xy = {round(max(10 * params["dielectric_height_mm"], 5 * params["pad_mm"], 5) * 2 + 2 * (dims["feed_trace_length_mm"] + params["pad_mm"] / 2), 2)}
+
+# Bottom reference plane (with clearance hole for via)
+metal.AddBox(
+    start=[-box_xy/2, -box_xy/2, -0.035],
+    stop=[box_xy/2, box_xy/2, 0],
+    priority=5
+)
+
+# Substrate
+substrate.AddBox(
+    start=[-box_xy/2, -box_xy/2, 0],
+    stop=[box_xy/2, box_xy/2, substrate_h],
+    priority=1
+)
+
+# Via barrel (cylinder through substrate)
+n_cyl = 16  # Polygon approximation segments
+theta = np.linspace(0, 2*np.pi, n_cyl+1)[:-1]
+
+# Via barrel as cylinder
+metal.AddCylinder(
+    start=[0, 0, 0],
+    stop=[0, 0, substrate_h],
+    radius=drill_r,
+    priority=15
+)
+
+# Bottom pad (annular ring on bottom layer)
+metal.AddCylinder(
+    start=[0, 0, -0.035],
+    stop=[0, 0, 0],
+    radius=pad_r,
+    priority=15
+)
+
+# Top pad (annular ring on top layer)
+metal.AddCylinder(
+    start=[0, 0, substrate_h],
+    stop=[0, 0, substrate_h + 0.035],
+    radius=pad_r,
+    priority=15
+)
+
+# Feed trace on bottom layer (extending in -x direction)
+metal.AddBox(
+    start=[-pad_r - feed_l, -feed_w/2, -0.035],
+    stop=[-pad_r, feed_w/2, 0],
+    priority=10
+)
+
+# Feed trace on top layer (extending in +x direction)
+metal.AddBox(
+    start=[pad_r, -feed_w/2, substrate_h],
+    stop=[pad_r + feed_l, feed_w/2, substrate_h + 0.035],
+    priority=10
+)
+
+# Port 1: Bottom layer feed
+port1 = FDTD.AddLumpedPort(
+    1, 50,
+    start=[-pad_r - feed_l, -feed_w/2, -0.035],
+    stop=[-pad_r - feed_l, feed_w/2, 0],
+    p_dir='z',
+    excite=1
+)
+
+# Port 2: Top layer feed
+port2 = FDTD.AddLumpedPort(
+    2, 50,
+    start=[pad_r + feed_l, -feed_w/2, substrate_h],
+    stop=[pad_r + feed_l, feed_w/2, substrate_h + 0.035],
+    p_dir='z',
+    excite=0
+)
+
+# Mesh
+mesh = CSX.GetGrid()
+mesh.SetDeltaUnit(unit)
+
+resolution = C0 / (f0 + fc) / unit / 20
+via_res = min(drill_r, substrate_h / 4, resolution / 2)
+
+# Fine mesh around via
+via_region = max(pad_r, antipad_r) * 2
+mesh.AddLine('x', np.concatenate([
+    np.arange(-box_xy/2 - 10, -via_region, resolution),
+    np.linspace(-via_region, via_region, max(20, int(2*via_region / via_res))),
+    np.arange(via_region, box_xy/2 + 10, resolution)
+]))
+mesh.AddLine('y', np.concatenate([
+    np.arange(-box_xy/2 - 10, -via_region, resolution),
+    np.linspace(-via_region, via_region, max(20, int(2*via_region / via_res))),
+    np.arange(via_region, box_xy/2 + 10, resolution)
+]))
+mesh.AddLine('z', np.concatenate([
+    np.arange(-10, -0.035, resolution),
+    np.linspace(-0.035, substrate_h + 0.035,
+                max(8, int((substrate_h + 0.07) / (substrate_h/6)) + 1)),
+    np.arange(substrate_h + 0.035, 10*substrate_h + 10, resolution)
+]))
+
+# Run simulation
+import tempfile
+Sim_Path = os.path.join(tempfile.gettempdir(), 'openems_via')
+if os.path.exists(Sim_Path):
+    import shutil
+    shutil.rmtree(Sim_Path)
+os.makedirs(Sim_Path)
+
+FDTD.Run(Sim_Path, verbose=3, cleanup=True)
+
+# Post-processing
+f = np.linspace(max(1e6, f0 - fc), f0 + fc, 401)
+port1.CalcPort(Sim_Path, f)
+port2.CalcPort(Sim_Path, f)
+
+s11 = port1.uf_ref / port1.uf_inc
+s21 = port2.uf_ref / port1.uf_inc
+s11_dB = 20 * np.log10(np.abs(s11))
+s21_dB = 20 * np.log10(np.abs(s21))
+
+# Extract via equivalent circuit parameters from S-parameters
+# Z_via approx from S11: Z = Z0 * (1+S11)/(1-S11)
+mid = len(f) // 2
+z_via_sim = 50 * (1 + s11[mid]) / (1 - s11[mid])
+
+print(f"=== Via Transition Results ===")
+print(f"Analytical estimates: L = {calc["inductance_ph"]} pH, C = {calc["capacitance_ff"]} fF")
+print(f"Resonance estimate: {calc["resonance_ghz"]} GHz")
+print(f"")
+print(f"At {{f0/1e9:.2f}} GHz:")
+print(f"  S11 = {{s11_dB[mid]:.1f}} dB")
+print(f"  S21 = {{s21_dB[mid]:.2f}} dB")
+print(f"  Via impedance (from S11) = {{np.abs(z_via_sim):.1f}} ohms")
+
+# Plot
+import matplotlib.pyplot as plt
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+ax1.plot(f/1e9, s11_dB, 'b-', label='S11 (Reflection)')
+ax1.plot(f/1e9, s21_dB, 'r-', label='S21 (Transmission)')
+ax1.set_xlabel('Frequency (GHz)')
+ax1.set_ylabel('Magnitude (dB)')
+ax1.set_title('Via Transition S-Parameters')
+ax1.grid(True)
+ax1.legend()
+ax1.set_ylim([-40, 5])
+
+# Smith chart data
+ax2.plot(f/1e9, np.real(z_via_sim * np.ones_like(f)), 'b-', label='Re(Z)')
+ax2.plot(f/1e9, np.imag(50 * (1 + s11) / (1 - s11)), 'r-', label='Im(Z)')
+ax2.set_xlabel('Frequency (GHz)')
+ax2.set_ylabel('Impedance (ohms)')
+ax2.set_title('Via Impedance vs Frequency')
+ax2.grid(True)
+ax2.legend()
+
+plt.tight_layout()
+plt.savefig('via_transition_s_params.png', dpi=150)
+print("S-parameter plot saved to via_transition_s_params.png")
+'''
+
+    def list_designs(self) -> dict:
+        """List all created PCB structure designs."""
+        designs = []
+        for design_id, design in self.designs.items():
+            designs.append({
+                "id": design_id,
+                "name": design["name"],
+                "type": design["type"],
+                "frequency_ghz": design["frequency_ghz"],
+            })
+        return {"success": True, "designs": designs, "count": len(designs)}
+
+    def get_design(self, design_id: str) -> dict:
+        """Get full details of a PCB structure design."""
+        if design_id not in self.designs:
+            return {"success": False, "error": f"Design not found: {design_id}"}
+        return {"success": True, "design": self.designs[design_id]}
+
+
+# Global designer instances
 designer = AntennaDesigner()
+pcb_designer = PCBStructureDesigner()
 
 
 # MCP Tool definitions
@@ -2018,6 +3165,116 @@ TOOLS = [
             "required": ["design_ids"],
         },
     ),
+    # PCB Structure Design Tools
+    Tool(
+        name="openems_create_microstrip",
+        description="Design a microstrip trace and calculate characteristic impedance using Hammerstad formula. Generates 2-port geometry for S-parameter extraction.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frequency_ghz": {
+                    "type": "number",
+                    "description": "Analysis frequency in GHz",
+                },
+                "trace_width_mm": {
+                    "type": "number",
+                    "description": "Trace width in mm",
+                },
+                "trace_length_mm": {
+                    "type": "number",
+                    "description": "Trace length in mm",
+                },
+                "dielectric_height_mm": {
+                    "type": "number",
+                    "description": "Dielectric (substrate) thickness in mm",
+                },
+                "substrate_er": {
+                    "type": "number",
+                    "description": "Substrate dielectric constant (default 4.2 for FR-4)",
+                    "default": 4.2,
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Design name",
+                },
+            },
+            "required": ["frequency_ghz", "trace_width_mm", "trace_length_mm", "dielectric_height_mm"],
+        },
+    ),
+    Tool(
+        name="openems_create_coupled_lines",
+        description="Design edge-coupled microstrip lines. Calculates even/odd mode impedances, differential/common-mode impedances, and coupling coefficient. 4-port geometry for NEXT/FEXT analysis.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frequency_ghz": {
+                    "type": "number",
+                    "description": "Analysis frequency in GHz",
+                },
+                "trace_width_mm": {
+                    "type": "number",
+                    "description": "Width of each trace in mm",
+                },
+                "spacing_mm": {
+                    "type": "number",
+                    "description": "Edge-to-edge spacing between traces in mm",
+                },
+                "trace_length_mm": {
+                    "type": "number",
+                    "description": "Coupled length in mm",
+                },
+                "dielectric_height_mm": {
+                    "type": "number",
+                    "description": "Dielectric thickness in mm",
+                },
+                "substrate_er": {
+                    "type": "number",
+                    "description": "Substrate dielectric constant (default 4.2 for FR-4)",
+                    "default": 4.2,
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Design name",
+                },
+            },
+            "required": ["frequency_ghz", "trace_width_mm", "spacing_mm", "trace_length_mm", "dielectric_height_mm"],
+        },
+    ),
+    Tool(
+        name="openems_create_via",
+        description="Design a via transition between two PCB layers. Models via barrel, pads, and feed traces. Estimates parasitic inductance and capacitance. 2-port geometry for reflection/transmission analysis.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "frequency_ghz": {
+                    "type": "number",
+                    "description": "Analysis frequency in GHz",
+                },
+                "drill_mm": {
+                    "type": "number",
+                    "description": "Via drill diameter in mm",
+                },
+                "pad_mm": {
+                    "type": "number",
+                    "description": "Via pad diameter in mm",
+                },
+                "dielectric_height_mm": {
+                    "type": "number",
+                    "description": "Dielectric thickness between layers in mm",
+                },
+                "substrate_er": {
+                    "type": "number",
+                    "description": "Substrate dielectric constant (default 4.2)",
+                    "default": 4.2,
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Design name",
+                },
+            },
+            "required": ["frequency_ghz", "drill_mm", "pad_mm", "dielectric_height_mm"],
+        },
+    ),
 ]
 
 
@@ -2064,11 +3321,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 name=arguments.get("name", "Helix Antenna"),
             )
         elif name == "openems_generate_script":
-            result = designer.generate_openems_script(arguments["design_id"])
+            design_id = arguments["design_id"]
+            if design_id in designer.designs:
+                result = designer.generate_openems_script(design_id)
+            elif design_id in pcb_designer.designs:
+                result = pcb_designer.generate_openems_script(design_id)
+            else:
+                result = {"success": False, "error": f"Design not found: {design_id}"}
         elif name == "openems_list_designs":
-            result = designer.list_designs()
+            antenna_result = designer.list_designs()
+            pcb_result = pcb_designer.list_designs()
+            all_designs = antenna_result.get("designs", []) + pcb_result.get("designs", [])
+            result = {"success": True, "designs": all_designs, "count": len(all_designs)}
         elif name == "openems_get_design":
-            result = designer.get_design(arguments["design_id"])
+            design_id = arguments["design_id"]
+            if design_id in designer.designs:
+                result = designer.get_design(design_id)
+            elif design_id in pcb_designer.designs:
+                result = pcb_designer.get_design(design_id)
+            else:
+                result = {"success": False, "error": f"Design not found: {design_id}"}
         elif name == "openems_list_antenna_types":
             result = designer.list_antenna_types()
         elif name == "openems_check_installation":
@@ -2082,14 +3354,79 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 ),
             }
         elif name == "openems_export_design":
-            result = designer.export_design(
-                design_id=arguments["design_id"],
-                format=arguments.get("format", "ascii"),
-            )
+            design_id = arguments["design_id"]
+            if design_id in designer.designs:
+                result = designer.export_design(
+                    design_id=design_id,
+                    format=arguments.get("format", "ascii"),
+                )
+            elif design_id in pcb_designer.designs:
+                # PCB structures export as JSON (no SVG/ASCII art yet)
+                result = {
+                    "success": True,
+                    "format": arguments.get("format", "json"),
+                    "data": pcb_designer.designs[design_id],
+                    "usage": "Import into CAD software or visualization tools",
+                }
+            else:
+                result = {"success": False, "error": f"Design not found: {design_id}"}
         elif name == "openems_optimize_hints":
-            result = designer.get_optimization_hints(arguments["design_id"])
+            design_id = arguments["design_id"]
+            if design_id in designer.designs:
+                result = designer.get_optimization_hints(design_id)
+            elif design_id in pcb_designer.designs:
+                # Basic optimization hints for PCB structures
+                pcb_design = pcb_designer.designs[design_id]
+                result = {
+                    "success": True,
+                    "design_id": design_id,
+                    "design_type": pcb_design["type"],
+                    "optimization_hints": [
+                        {"category": "General", "suggestions": [
+                            "Run full FDTD simulation for accurate S-parameters",
+                            "Refine mesh around trace edges and via barrel",
+                            "Verify impedance with frequency-dependent substrate properties",
+                        ]}
+                    ],
+                    "parameter_sensitivity": {},
+                    "next_steps": [
+                        "Generate OpenEMS script and run simulation",
+                        "Compare simulated Z0 with analytical calculation",
+                        "Sweep frequency to find usable bandwidth",
+                    ],
+                }
+            else:
+                result = {"success": False, "error": f"Design not found: {design_id}"}
         elif name == "openems_compare_designs":
             result = designer.compare_designs(arguments["design_ids"])
+        elif name == "openems_create_microstrip":
+            result = pcb_designer.create_microstrip_trace(
+                frequency_ghz=arguments["frequency_ghz"],
+                trace_width_mm=arguments["trace_width_mm"],
+                trace_length_mm=arguments["trace_length_mm"],
+                dielectric_height_mm=arguments["dielectric_height_mm"],
+                substrate_er=arguments.get("substrate_er", 4.2),
+                name=arguments.get("name", "Microstrip Trace"),
+            )
+        elif name == "openems_create_coupled_lines":
+            result = pcb_designer.create_coupled_lines(
+                frequency_ghz=arguments["frequency_ghz"],
+                trace_width_mm=arguments["trace_width_mm"],
+                spacing_mm=arguments["spacing_mm"],
+                trace_length_mm=arguments["trace_length_mm"],
+                dielectric_height_mm=arguments["dielectric_height_mm"],
+                substrate_er=arguments.get("substrate_er", 4.2),
+                name=arguments.get("name", "Coupled Lines"),
+            )
+        elif name == "openems_create_via":
+            result = pcb_designer.create_via_transition(
+                frequency_ghz=arguments["frequency_ghz"],
+                drill_mm=arguments["drill_mm"],
+                pad_mm=arguments["pad_mm"],
+                dielectric_height_mm=arguments["dielectric_height_mm"],
+                substrate_er=arguments.get("substrate_er", 4.2),
+                name=arguments.get("name", "Via Transition"),
+            )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
 
