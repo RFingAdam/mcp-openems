@@ -1,21 +1,45 @@
-<p align="center">
-  <img src="assets/logo.svg" alt="MCP OpenEMS" width="400">
-</p>
+<div align="center">
 
-<p align="center">
-  <strong>AI-assisted antenna design and electromagnetic simulation via MCP</strong>
-</p>
+<img src="assets/logo-banner.svg" alt="mcp-openems — 3D FDTD electromagnetic simulation" width="100%"/>
 
-<p align="center">
-  <a href="#installation">Installation</a> •
-  <a href="#features">Features</a> •
-  <a href="#usage-examples">Usage</a> •
-  <a href="#tool-reference">Tool Reference</a>
-</p>
+<br/>
+
+[![License](https://img.shields.io/badge/License-Apache--2.0-1E40AF.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-3776AB.svg)](https://www.python.org/downloads/)
+[![MCP](https://img.shields.io/badge/MCP-server-A78BFA.svg)](https://modelcontextprotocol.io)
+[![eng-mcp-suite](https://img.shields.io/badge/eng--mcp--suite-member-22D3EE.svg)](https://github.com/RFingAdam/eng-mcp-suite)
+
+**AI-assisted antenna and RF-structure design via openEMS FDTD, driven over MCP.**
+**Patch / dipole / monopole / horn / helix antennas, microstrip and coupled-line transmission lines, via transitions — geometry, analytical Z₀/εeff, and ready-to-run openEMS Python scripts.**
+
+[Quick start](#installation) ·
+[Tools](#tool-reference) ·
+[Examples](examples/) ·
+[Suite catalog](https://github.com/RFingAdam/eng-mcp-suite)
+
+</div>
 
 ---
 
-An MCP server for designing antennas and electromagnetic structures using OpenEMS FDTD simulation. Provides analytical design calculators that work immediately, plus OpenEMS script generation for full-wave simulation.
+An MCP server for designing antennas and electromagnetic structures using openEMS FDTD simulation. Provides analytical design calculators that work immediately, plus openEMS script generation for full-wave simulation.
+
+## Part of the engineering toolkit
+
+This repo is part of [eng-mcp-suite](https://github.com/RFingAdam/eng-mcp-suite)
+— an MCP-driven engineering toolkit for RF / EMC / PCB / signal-integrity /
+lab-test workflows.
+
+Related tools in the toolkit:
+
+| Tool | When to reach for it |
+|---|---|
+| [**lineforge**](https://github.com/RFingAdam/lineforge) | 2D quasi-TEM closed-form for transmission lines (microstrip, stripline, CPWG, differential, three-conductor). Use this when you need impedance fast and the geometry is 2D. |
+| [**mcp-nec2-antenna**](https://github.com/RFingAdam/mcp-nec2-antenna) | Wire-antenna method-of-moments (dipole / Yagi / vertical / loop / inverted-V). Use this when you have a wire-antenna geometry and don't need the 3D-field detail of FDTD. |
+| [**mcp-pcb-emcopilot**](https://github.com/RFingAdam/mcp-pcb-emcopilot) | PCB layout review (decoupling, return paths, plane resonances, DDR/PCIe/USB SI). Often pairs with mcp-openems for full-wave validation of a flagged region. |
+
+When to use mcp-openems specifically: full-wave 3D FDTD validation, broadband
+S-parameters, near/far-field characterization, antenna geometries with 3D
+features (horns, helices), or when closed-form is running out of accuracy.
 
 ## Features
 

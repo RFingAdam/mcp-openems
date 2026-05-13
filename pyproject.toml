@@ -48,3 +48,8 @@ Issues = "https://github.com/RFingAdam/mcp-openems/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_openems"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
