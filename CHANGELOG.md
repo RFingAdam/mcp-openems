@@ -5,6 +5,19 @@ All notable changes to **mcp-openems** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-05-13
+
+### Changed
+- **License: Apache-2.0 → AGPL-3.0-or-later.** Aligns with the
+  eng-mcp-suite toolkit-wide AGPL move. The AGPL closes the
+  "wrap as a paid SaaS without contributing back" gap by extending
+  copyleft to network use. The underlying openEMS engine remains
+  GPL-3.0; this wrapper invokes it at runtime without redistribution,
+  so the wrapper's AGPL license is independent of the engine's GPL.
+  See the
+  [LICENSE_SUMMARY](https://github.com/RFingAdam/eng-mcp-suite/blob/main/LICENSE_SUMMARY.md)
+  in eng-mcp-suite for the toolkit-wide rationale.
+
 ## [0.1.0] — 2026-05-13
 
 ### Added
