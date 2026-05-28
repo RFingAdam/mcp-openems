@@ -53,3 +53,18 @@ packages = ["src/mcp_openems"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # line too long
+    "E741",   # ambiguous variable names (l, I, O) — common in engineering formulas
+    "UP006",  # use X | Y instead of Union (kept for older-Python compatibility)
+    "UP045",  # use X | Y instead of Optional
+    "F401",   # imported but unused — availability-probe imports / re-exports
+    "F841",   # local variable assigned but never used — intermediate calculations
+]
