@@ -70,6 +70,7 @@ def test_antenna_designer_creates_dipole():
 )
 def test_openems_install_check():
     """If openEMS is installed locally, the install check should report OK."""
-    from mcp_openems.server import AntennaDesigner  # noqa: F401
     import openEMS
+
+    from mcp_openems.server import AntennaDesigner  # noqa: F401
     assert openEMS is not None

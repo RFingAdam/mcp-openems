@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 # Check for OpenEMS availability
 OPENEMS_AVAILABLE = False
@@ -1570,7 +1570,7 @@ print("Template generated - customize geometry before running")
             hints = [
                 {
                     "category": "Impedance Match",
-                    "issue": f"Dipole impedance ~73Ω, not matched to 50Ω",
+                    "issue": "Dipole impedance ~73Ω, not matched to 50Ω",
                     "suggestions": [
                         "Use a balun with impedance transformation",
                         "Use gamma match or T-match for 50Ω",
@@ -3439,7 +3439,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 def main():
     """Run the MCP server."""
-    import sys
 
     async def run():
         async with stdio_server() as (read_stream, write_stream):
