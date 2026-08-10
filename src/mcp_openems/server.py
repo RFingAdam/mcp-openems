@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsRequest, ListToolsResult, ServerRequestContext, TextContent, Tool
 
 # Check for OpenEMS availability
 OPENEMS_AVAILABLE = False
@@ -2942,7 +2942,7 @@ TOOLS = [
     Tool(
         name="openems_create_patch",
         description="Design a rectangular microstrip patch antenna. Calculates dimensions using transmission line model for specified frequency and substrate.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -2970,7 +2970,7 @@ TOOLS = [
     Tool(
         name="openems_create_dipole",
         description="Design a half-wave dipole antenna. Classic resonant antenna with well-known characteristics.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -2993,7 +2993,7 @@ TOOLS = [
     Tool(
         name="openems_create_monopole",
         description="Design a quarter-wave monopole antenna over a ground plane.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3021,7 +3021,7 @@ TOOLS = [
     Tool(
         name="openems_create_horn",
         description="Design a pyramidal horn antenna for specified gain. Calculates aperture dimensions and length.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3044,7 +3044,7 @@ TOOLS = [
     Tool(
         name="openems_create_helix",
         description="Design an axial-mode helical antenna for circular polarization.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3067,7 +3067,7 @@ TOOLS = [
     Tool(
         name="openems_generate_script",
         description="Generate a complete OpenEMS Python simulation script for a design. The script can be run independently.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "design_id": {
@@ -3081,7 +3081,7 @@ TOOLS = [
     Tool(
         name="openems_list_designs",
         description="List all antenna designs created in this session.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {},
         },
@@ -3089,7 +3089,7 @@ TOOLS = [
     Tool(
         name="openems_get_design",
         description="Get full details of a specific antenna design including dimensions and geometry.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "design_id": {
@@ -3103,7 +3103,7 @@ TOOLS = [
     Tool(
         name="openems_list_antenna_types",
         description="List available antenna types with descriptions, typical gain, and applications.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {},
         },
@@ -3111,7 +3111,7 @@ TOOLS = [
     Tool(
         name="openems_check_installation",
         description="Check if OpenEMS is installed and available for running simulations.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {},
         },
@@ -3119,7 +3119,7 @@ TOOLS = [
     Tool(
         name="openems_export_design",
         description="Export antenna design for visualization. Formats: json (full data), svg (vector graphic), ascii (terminal art).",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "design_id": {
@@ -3139,7 +3139,7 @@ TOOLS = [
     Tool(
         name="openems_optimize_hints",
         description="Get optimization suggestions for an antenna design including parameter sensitivities and improvement strategies.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "design_id": {
@@ -3153,7 +3153,7 @@ TOOLS = [
     Tool(
         name="openems_compare_designs",
         description="Compare multiple antenna designs side-by-side with metrics and recommendations.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "design_ids": {
@@ -3169,7 +3169,7 @@ TOOLS = [
     Tool(
         name="openems_create_microstrip",
         description="Design a microstrip trace and calculate characteristic impedance using Hammerstad formula. Generates 2-port geometry for S-parameter extraction.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3204,7 +3204,7 @@ TOOLS = [
     Tool(
         name="openems_create_coupled_lines",
         description="Design edge-coupled microstrip lines. Calculates even/odd mode impedances, differential/common-mode impedances, and coupling coefficient. 4-port geometry for NEXT/FEXT analysis.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3243,7 +3243,7 @@ TOOLS = [
     Tool(
         name="openems_create_via",
         description="Design a via transition between two PCB layers. Models via barrel, pads, and feed traces. Estimates parasitic inductance and capacitance. 2-port geometry for reflection/transmission analysis.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "frequency_ghz": {
@@ -3278,15 +3278,15 @@ TOOLS = [
 ]
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+async def handle_list_tools(ctx: ServerRequestContext, params: ListToolsRequest) -> ListToolsResult:
     """Return list of available tools."""
-    return TOOLS
+    return ListToolsResult(tools=TOOLS)
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+async def handle_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
     """Execute an OpenEMS design tool."""
+    name = params.name
+    arguments = params.arguments
     try:
         if name == "openems_create_patch":
             result = designer.create_patch_antenna(
@@ -3430,11 +3430,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
 
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, indent=2))])
 
     except Exception as e:
         error_result = {"success": False, "error": str(e)}
-        return [TextContent(type="text", text=json.dumps(error_result))]
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(error_result))])
+
+
+def register_handlers(server: Server) -> None:
+    """Register request handlers for MCP 2.0.0 compatibility."""
+    server.add_request_handler("tools/list", ListToolsRequest, handle_list_tools)
+    server.add_request_handler("tools/call", CallToolRequestParams, handle_call_tool)
+
+
+# Register MCP 2.x request handlers
+register_handlers(server)
 
 
 def main():
