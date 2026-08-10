@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolRequestParams, CallToolResult, ListToolsRequest, ListToolsResult, ServerRequestContext, TextContent, Tool
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsRequest, ListToolsResult, TextContent, Tool
 
 # Check for OpenEMS availability
 OPENEMS_AVAILABLE = False
@@ -3278,12 +3278,12 @@ TOOLS = [
 ]
 
 
-async def handle_list_tools(ctx: ServerRequestContext, params: ListToolsRequest) -> ListToolsResult:
+async def handle_list_tools(ctx, params: ListToolsRequest) -> ListToolsResult:
     """Return list of available tools."""
     return ListToolsResult(tools=TOOLS)
 
 
-async def handle_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+async def handle_call_tool(ctx, params: CallToolRequestParams) -> CallToolResult:
     """Execute an OpenEMS design tool."""
     name = params.name
     arguments = params.arguments
