@@ -214,6 +214,15 @@ align with the eng-mcp-suite toolkit-wide AGPL move. The underlying
 openEMS engine remains GPL-3.0; this wrapper is AGPL-3.0-or-later and
 invokes the engine at runtime without redistribution.
 
+## Commercial licensing
+
+This project is licensed under AGPL-3.0-or-later. A commercial license —
+for embedding in a closed-source product, hosting as a paid service
+without AGPL's share-back obligations, or proprietary redistribution —
+is available on a case-by-case basis. See [eng-mcp-suite's licensing
+policy](https://github.com/RFingAdam/eng-mcp-suite/blob/main/LICENSE_SUMMARY.md#commercial-licensing)
+or open an issue and tag `@RFingAdam`.
+
 ## Author
 
 Adam Engelbrecht - [@RFingAdam](https://github.com/RFingAdam)
