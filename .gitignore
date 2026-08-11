@@ -48,3 +48,11 @@ tmp/
 # OS
 .DS_Store
 Thumbs.db
+
+# CAD/design files
+*.kicad_pcb
+*.brd
+*.step
+*.stp
+*.zip
+.ip-denylist
