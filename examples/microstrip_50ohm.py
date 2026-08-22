@@ -11,7 +11,7 @@ This is the cheapest end-to-end validation case for the wrapper:
 
 * Closed-form (Wadell / Hammerstad-Jensen) gets 50.0 Ω ± 1% for these
   geometric parameters, so we have a strong analytical anchor.
-* Running it as an example doubles as an installation smoke test — if
+* Running it as an example doubles as an installation smoke test. If
   the openEMS engine is correctly built and CSXCAD/openEMS Python
   bindings are importable, this sim runs to completion in ~30 s.
 * The numbers cross-check against the same case in lineforge's

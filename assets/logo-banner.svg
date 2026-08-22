@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320"
-     role="img" aria-label="mcp-openems — 3D FDTD electromagnetic simulation">
-  <title>mcp-openems — 3D FDTD electromagnetic simulation</title>
+     role="img" aria-label="mcp-openems: 3D FDTD electromagnetic simulation">
+  <title>mcp-openems: 3D FDTD electromagnetic simulation</title>
 
   <defs>
     <linearGradient id="t-bg" x1="0" y1="0" x2="1" y2="0">

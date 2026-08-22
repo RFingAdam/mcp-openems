@@ -7,7 +7,7 @@ double as installation smoke tests.
 
 | Example | What it does | Requires openEMS engine? |
 |---|---|---|
-| [`microstrip_50ohm.py`](microstrip_50ohm.py) | 50-Ω microstrip on 0.787 mm FR4. Sets up the geometry, reports the wrapper's analytical Z₀/εeff, and prints agreement vs the Hammerstad-Jensen reference. | Only for the FDTD step — runs offline with `--closed-form-only`. |
+| [`microstrip_50ohm.py`](microstrip_50ohm.py) | 50-Ω microstrip on 0.787 mm FR4. Sets up the geometry, reports the wrapper's analytical Z₀/εeff, and prints agreement vs the Hammerstad-Jensen reference. | Only for the FDTD step: runs offline with `--closed-form-only`. |
 
 ## Running
 
@@ -25,5 +25,5 @@ without invoking the FDTD engine.
 
 The same case is the anchor of lineforge's analytical-vs-FDTD validation
 story. See [`lineforge/examples/09_l3_sig1_em_validation/`](https://github.com/RFingAdam/lineforge/tree/main/examples/09_l3_sig1_em_validation)
-for the cross-validation framework — analytical solver in lineforge,
+for the cross-validation framework: analytical solver in lineforge,
 FDTD reference via openEMS, agreement to ±2 %.

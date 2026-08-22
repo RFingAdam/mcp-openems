@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-banner.svg" alt="mcp-openems — 3D FDTD electromagnetic simulation" width="100%"/>
+<img src="assets/logo-banner.svg" alt="mcp-openems: 3D FDTD electromagnetic simulation" width="100%"/>
 
 <br/>
 
@@ -10,7 +10,7 @@
 [![eng-mcp-suite](https://img.shields.io/badge/eng--mcp--suite-member-22D3EE.svg)](https://github.com/RFingAdam/eng-mcp-suite)
 
 **AI-assisted antenna and RF-structure design via openEMS FDTD, driven over MCP.**
-**Patch / dipole / monopole / horn / helix antennas, microstrip and coupled-line transmission lines, via transitions — geometry, analytical Z₀/εeff, and ready-to-run openEMS Python scripts.**
+**Patch / dipole / monopole / horn / helix antennas, microstrip and coupled-line transmission lines, via transitions: geometry, analytical Z₀/εeff, and ready-to-run openEMS Python scripts.**
 
 [Quick start](#installation) ·
 [Tools](#tool-reference) ·
@@ -25,8 +25,8 @@ An MCP server for designing antennas and electromagnetic structures using openEM
 
 ## Part of the engineering toolkit
 
-This repo is part of [eng-mcp-suite](https://github.com/RFingAdam/eng-mcp-suite)
-— an MCP-driven engineering toolkit for RF / EMC / PCB / signal-integrity /
+This repo is part of [eng-mcp-suite](https://github.com/RFingAdam/eng-mcp-suite),
+an MCP-driven engineering toolkit for RF / EMC / PCB / signal-integrity /
 lab-test workflows.
 
 Related tools in the toolkit:
@@ -216,9 +216,9 @@ invokes the engine at runtime without redistribution.
 
 ## Commercial licensing
 
-This project is licensed under AGPL-3.0-or-later. A commercial license —
-for embedding in a closed-source product, hosting as a paid service
-without AGPL's share-back obligations, or proprietary redistribution —
+This project is licensed under AGPL-3.0-or-later. A commercial license
+(for embedding in a closed-source product, hosting as a paid service
+without AGPL's share-back obligations, or proprietary redistribution)
 is available on a case-by-case basis. See [eng-mcp-suite's licensing
 policy](https://github.com/RFingAdam/eng-mcp-suite/blob/main/LICENSE_SUMMARY.md#commercial-licensing)
 or open an issue and tag `@RFingAdam`.

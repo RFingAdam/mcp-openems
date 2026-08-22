@@ -1,6 +1,6 @@
 """Smoke tests for mcp-openems.
 
-These tests don't run an actual FDTD simulation — they just verify the
+These tests don't run an actual FDTD simulation. They just verify the
 MCP server module is importable, the tool surface is wired correctly,
 and the analytical design calculators (which work without openEMS being
 installed) give sensible numbers.
@@ -41,7 +41,7 @@ def test_antenna_designer_creates_patch():
 
     dims = result["design"]["dimensions"]
     # Patch length for 2.4 GHz on FR4 is ~28-30 mm by the transmission-line
-    # model. Width is typically ~38 mm. Loose bounds — smoke check.
+    # model. Width is typically ~38 mm. Loose bounds: smoke check.
     assert 20 <= dims["patch_length_mm"] <= 40
     assert 30 <= dims["patch_width_mm"] <= 50
 
