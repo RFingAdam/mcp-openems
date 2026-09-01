@@ -22,6 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
 ]
@@ -31,7 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Note: OpenEMS/CSXCAD must be installed separately (not on PyPI)
+# Note: OpenEMS/CSXCAD must be installed separately (not on PyPI). They are
+# compiled extensions, pinned to one Python minor version and linked against
+# system HDF5/VTK/boost -- see the README for the build and for the two ways
+# that combination breaks.
 # See: https://openems.de/index.php/OpenEMS#Installation
 dev = [
     "pytest>=7.0.0",

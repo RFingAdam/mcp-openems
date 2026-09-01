@@ -71,11 +71,33 @@ uv pip install -e .
 
 ### 2. (Optional) Install OpenEMS for simulation
 
+The MCP works without OpenEMS: the design tools calculate dimensions
+analytically. Full FDTD simulation needs the CSXCAD and openEMS Python bindings.
+
+**These are not on PyPI.** `pip install CSXCAD openEMS` does not work. They are
+compiled extensions built from source against the openEMS C++ install:
+
 ```bash
-# The MCP works without OpenEMS - design tools calculate dimensions analytically
-# For full FDTD simulation, install OpenEMS:
-pip install CSXCAD openEMS
+git clone --recursive https://github.com/thliebig/openEMS-Project.git
+cd openEMS-Project
+./update_openEMS.sh ~/opt/openEMS          # builds the C++ libraries
+source .venv/bin/activate                  # the venv you installed this MCP into
+./scripts/build_python.sh --cpp-install-dir ~/opt/openEMS
 ```
+
+Two things that will bite you, both of which broke this repo in 2026-08:
+
+- **The bindings are ABI-pinned to one Python minor version.** A
+  `cpython-314` extension is invisible to a 3.12 interpreter, and vice versa. If
+  you recreate the venv on a different Python, rebuild the bindings too.
+- **They link against system HDF5, VTK and boost.** A distro upgrade that bumps
+  those sonames breaks every `.so` here with `libhdf5_serial.so.NNN: cannot open
+  shared object file`. Rebuild against the new libraries;
+  `build_python.sh --cpp-install-dir` rebuilds only the Python layer, which is
+  enough when the C++ install is already current.
+
+Run `openems_check_installation` to see which of these you are hitting: it
+reports the real import error and the interpreter in use.
 
 ### 3. Add to your MCP client
 

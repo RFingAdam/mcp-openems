@@ -21,14 +21,23 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsRequest, ListToolsResult, TextContent, Tool
 
-# Check for OpenEMS availability
+# Check for OpenEMS availability.
+#
+# The reason for keeping the error text: CSXCAD/openEMS are compiled extensions
+# built against a specific Python ABI and a specific set of system libraries, so
+# they break in ways a bare "not installed" cannot describe -- a distro upgrade
+# that moves HDF5 or VTK leaves an ImportError naming a missing .so, and a venv
+# on the wrong minor version cannot see a cpython-3XX extension at all. Both
+# were live failures here in 2026-08. Swallowing that text made a broken solver
+# indistinguishable from a working one with nothing to do.
 OPENEMS_AVAILABLE = False
+OPENEMS_IMPORT_ERROR: str | None = None
 try:
     import CSXCAD
     import openEMS
     OPENEMS_AVAILABLE = True
-except ImportError:
-    pass
+except ImportError as exc:
+    OPENEMS_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 # Create MCP server instance
 server = Server("openems-simulator")
@@ -3347,12 +3356,20 @@ async def handle_call_tool(ctx, params: CallToolRequestParams) -> CallToolResult
             result = {
                 "success": True,
                 "openems_available": OPENEMS_AVAILABLE,
+                "python": sys.executable,
                 "message": (
                     "OpenEMS is installed and ready for simulations"
                     if OPENEMS_AVAILABLE
-                    else "OpenEMS not installed. Design tools work, but simulation requires: pip install CSXCAD openEMS"
+                    else (
+                        "OpenEMS bindings are not importable, so design tools work but "
+                        "simulation does not. CSXCAD/openEMS are NOT on PyPI -- they are "
+                        "built from source against the C++ install; see this repo's README. "
+                        f"Import error: {OPENEMS_IMPORT_ERROR}"
+                    )
                 ),
             }
+            if not OPENEMS_AVAILABLE:
+                result["import_error"] = OPENEMS_IMPORT_ERROR
         elif name == "openems_export_design":
             design_id = arguments["design_id"]
             if design_id in designer.designs:
