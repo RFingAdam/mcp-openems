@@ -585,7 +585,7 @@ class AntennaDesigner:
             "script": script,
             "instructions": [
                 "1. Save this script as simulate_antenna.py",
-                "2. Install OpenEMS: pip install CSXCAD openEMS",
+                "2. Build openEMS and its CSXCAD/openEMS Python bindings from source (not on PyPI; see the mcp-openems README)",
                 "3. Run: python simulate_antenna.py",
                 "4. View results in ParaView or OpenEMS AppCSXCAD",
             ],
@@ -2325,7 +2325,7 @@ class PCBStructureDesigner:
             "script": script,
             "instructions": [
                 "1. Save this script as simulate_pcb_structure.py",
-                "2. Install OpenEMS: pip install CSXCAD openEMS",
+                "2. Build openEMS and its CSXCAD/openEMS Python bindings from source (not on PyPI; see the mcp-openems README)",
                 "3. Run: python simulate_pcb_structure.py",
                 "4. View S-parameter results in generated plots",
             ],
