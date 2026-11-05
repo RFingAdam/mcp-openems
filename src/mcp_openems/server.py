@@ -274,17 +274,33 @@ class AntennaDesigner:
         frequency_ghz: float,
         gain_dbi: float = 15,
         name: str = "Horn Antenna",
+        aperture_efficiency: float = 0.51,
+        aperture_width_mm: float | None = None,
+        aperture_height_mm: float | None = None,
     ) -> dict:
         """Design a pyramidal horn antenna for specified gain.
 
+        The reported gain is always computed from the aperture actually
+        generated: G = e_ap * 4*pi*A / lambda^2 with A = width * height.
+
         Args:
             frequency_ghz: Center frequency in GHz
-            gain_dbi: Target gain in dBi (typically 10-25)
+            gain_dbi: Target gain in dBi (typically 10-25); sizes the aperture
+                when no aperture dimensions are given
             name: Design name
+            aperture_efficiency: e_ap; default 0.51, the usual figure for an
+                optimum-gain pyramidal horn (Balanis, Antenna Theory, ch. 13)
+            aperture_width_mm, aperture_height_mm: use this aperture instead of
+                sizing one from gain_dbi (both must be given)
 
         Returns:
             Design specification with calculated dimensions
         """
+        if not 0 < aperture_efficiency <= 1:
+            return {"success": False, "error": "aperture_efficiency must be in (0, 1]"}
+        if (aperture_width_mm is None) != (aperture_height_mm is None):
+            return {"success": False, "error": "give both aperture_width_mm and aperture_height_mm, or neither"}
+
         design_id = str(uuid4())
         c = 299792458
         f = frequency_ghz * 1e9
@@ -296,16 +312,23 @@ class AntennaDesigner:
         a_wg = wavelength_mm * 0.7  # Waveguide width
         b_wg = a_wg / 2  # Waveguide height
 
-        # Calculate aperture dimensions from gain
-        # G = 10 * log10(4 * pi * A_e / lambda^2)
-        # A_e = aperture efficiency * A_physical (efficiency ~ 0.5)
-        g_linear = 10 ** (gain_dbi / 10)
-        a_physical = g_linear * (wavelength ** 2) / (4 * math.pi * 0.5)
-        a_physical_mm = math.sqrt(a_physical) * 1000
+        if aperture_width_mm is not None:
+            a_horn = float(aperture_width_mm)
+            b_horn = float(aperture_height_mm)
+        else:
+            # Size the aperture so that e_ap * 4*pi*(a*b)/lambda^2 = target gain,
+            # with the 0.7 height/width ratio this design uses. (The old code
+            # took a = sqrt(A) and b = 0.7*a, so the physical area was only
+            # 0.7*A and the real gain 1.55 dB below the one reported.)
+            g_linear = 10 ** (gain_dbi / 10)
+            area_mm2 = g_linear * wavelength_mm ** 2 / (4 * math.pi * aperture_efficiency)
+            a_horn = math.sqrt(area_mm2 / 0.7)  # E-plane aperture
+            b_horn = 0.7 * a_horn  # H-plane aperture
 
-        # Aperture dimensions (pyramidal horn)
-        a_horn = a_physical_mm  # E-plane aperture
-        b_horn = a_physical_mm * 0.7  # H-plane aperture
+        aperture_area_mm2 = a_horn * b_horn
+        gain_from_aperture_dbi = 10 * math.log10(
+            aperture_efficiency * 4 * math.pi * aperture_area_mm2 / wavelength_mm ** 2
+        )
 
         # Horn length (optimum horn has specific length for max efficiency)
         r_e = (a_horn ** 2) / (3 * wavelength_mm)  # E-plane slant length
@@ -318,7 +341,8 @@ class AntennaDesigner:
             "type": "horn",
             "frequency_ghz": frequency_ghz,
             "parameters": {
-                "target_gain_dbi": gain_dbi,
+                "target_gain_dbi": gain_dbi if aperture_width_mm is None else None,
+                "aperture_efficiency": aperture_efficiency,
             },
             "dimensions": {
                 "waveguide_width_mm": round(a_wg, 2),
@@ -329,8 +353,14 @@ class AntennaDesigner:
                 "wavelength_mm": round(wavelength_mm, 2),
             },
             "calculated": {
-                "estimated_gain_dbi": gain_dbi,
-                "aperture_efficiency": 0.5,
+                "estimated_gain_dbi": round(gain_from_aperture_dbi, 2),
+                "gain_formula": "G = e_ap * 4*pi*A/lambda^2, A = aperture_width_mm * aperture_height_mm",
+                "aperture_area_mm2": round(aperture_area_mm2, 1),
+                "aperture_efficiency": aperture_efficiency,
+                "aperture_efficiency_basis": (
+                    "user value" if aperture_efficiency != 0.51
+                    else "0.51, typical optimum-gain pyramidal horn (Balanis, Antenna Theory, ch. 13)"
+                ),
                 "e_plane_beamwidth_deg": round(56 * wavelength_mm / a_horn, 1),
                 "h_plane_beamwidth_deg": round(67 * wavelength_mm / b_horn, 1),
             },
@@ -391,8 +421,29 @@ class AntennaDesigner:
         # Quarter-wave with shortening
         height_mm = (wavelength_mm / 4) * 0.95
 
-        # Monopole impedance is half of dipole
+        # Monopole impedance is half of dipole (image theory, infinite ground)
         z_real = 36.5
+
+        # 5.15 dBi (and 36.5 ohm) are image-theory values for an infinite,
+        # perfectly conducting ground plane. A finite ground plane diffracts at
+        # its edge, tilts the beam up and changes the peak directivity; no
+        # closed-form correction is applied here. Below half a wavelength of
+        # ground-plane diameter the infinite-ground figure is not a usable
+        # estimate at all, so no gain is reported.
+        ground_wavelengths = ground_plane_mm / wavelength_mm
+        small_ground = ground_wavelengths < 0.5
+        if small_ground:
+            directivity_dbi = None
+            gain_status = (
+                f"not estimated for finite ground: the ground plane is {ground_wavelengths:.2f} wavelengths "
+                "across (< 0.5); the 5.15 dBi infinite-ground value does not apply. Run the simulation."
+            )
+        else:
+            directivity_dbi = 5.15
+            gain_status = (
+                f"infinite-ground value; the actual ground plane is {ground_wavelengths:.2f} wavelengths across, "
+                "so expect a tilted beam and a different peak directivity. Run the simulation to confirm."
+            )
 
         design = {
             "id": design_id,
@@ -410,8 +461,12 @@ class AntennaDesigner:
             },
             "calculated": {
                 "impedance_ohms": z_real,
-                "directivity_dbi": 5.15,  # 3 dB over dipole due to ground plane
-                "ground_plane_wavelengths": round(ground_plane_mm / wavelength_mm, 2),
+                "directivity_dbi": directivity_dbi,
+                "directivity_dbi_infinite_ground": 5.15,  # 3 dB over a dipole, image theory
+                "ground_plane_assumption": "infinite perfectly conducting ground plane (image theory) for directivity and impedance",
+                "ground_plane_wavelengths": round(ground_wavelengths, 2),
+                "small_ground_plane": small_ground,
+                "gain_status": gain_status,
             },
             "geometry": {
                 "unit": "mm",
@@ -1067,7 +1122,7 @@ print("S11 plot saved to helix_s11.png")
 """OpenEMS Horn Antenna Simulation
 Design: {design["name"]}
 Frequency: {design["frequency_ghz"]} GHz
-Target Gain: {design["parameters"]["target_gain_dbi"]} dBi
+Aperture gain estimate: {design["calculated"]["estimated_gain_dbi"]} dBi (e_ap = {design["calculated"]["aperture_efficiency"]})
 Generated by mcp-openems
 """
 
@@ -1721,6 +1776,8 @@ print("Template generated - customize geometry before running")
                 entry["size_mm"] = dims["total_length_mm"]
             elif "ground_plane_mm" in dims:
                 entry["size_mm"] = dims["ground_plane_mm"]
+            elif "ground_plane_diameter_mm" in dims:
+                entry["size_mm"] = dims["ground_plane_diameter_mm"]
             elif "aperture_width_mm" in dims:
                 entry["size_mm"] = dims["aperture_width_mm"]
 
@@ -1729,9 +1786,12 @@ print("Template generated - customize geometry before running")
         # Generate recommendations
         recommendations = []
         if len(designs) >= 2:
-            gains = [(d.get("gain_dbi", 0), d["name"]) for d in comparison["designs"]]
+            # Designs without a gain estimate (e.g. a monopole on a small finite
+            # ground plane) are left out rather than ranked as 0 dBi.
+            gains = [(d["gain_dbi"], d["name"]) for d in comparison["designs"] if d.get("gain_dbi") is not None]
             gains.sort(reverse=True)
-            recommendations.append(f"Highest gain: {gains[0][1]} ({gains[0][0]:.1f} dBi)")
+            if gains:
+                recommendations.append(f"Highest gain: {gains[0][1]} ({gains[0][0]:.1f} dBi)")
 
             sizes = [(d.get("size_mm", 999), d["name"]) for d in comparison["designs"]]
             sizes.sort()
@@ -1771,7 +1831,7 @@ print("Template generated - customize geometry before running")
                     "type": "monopole",
                     "name": "Quarter-Wave Monopole",
                     "description": "Vertical antenna over ground plane",
-                    "typical_gain_dbi": "5.15",
+                    "typical_gain_dbi": "5.15 (infinite ground plane; lower/tilted on a finite ground)",
                     "polarization": "Vertical",
                     "applications": ["Mobile", "Vehicle", "Base station"],
                 },
@@ -1795,11 +1855,210 @@ print("Template generated - customize geometry before running")
         }
 
 
+SPEED_OF_LIGHT_M_S = 299792458.0
+COPPER_THICKNESS_MM = 0.035  # 1 oz copper
+
+
+def microstrip_z0_and_er_eff(w_mm: float, h_mm: float, er: float) -> tuple[float, float]:
+    """Hammerstad-Jensen microstrip characteristic impedance and effective permittivity.
+
+    Zero-thickness strip of width ``w_mm`` over a ground plane at distance ``h_mm``
+    in a dielectric of relative permittivity ``er``. Returns ``(z0_ohms, er_eff)``.
+    """
+    u = w_mm / h_mm
+    a_ham = 1 + (1 / 49) * math.log(
+        (u ** 4 + (u / 52) ** 2) / (u ** 4 + 0.432)
+    ) + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
+    b_ham = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
+    er_eff = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / u) ** (-a_ham * b_ham)
+    f_u = 6 + (2 * math.pi - 6) * math.exp(-(30.666 / u) ** 0.7528)
+    z0_air = (377 / (2 * math.pi)) * math.log(f_u / u + math.sqrt(1 + (2 / u) ** 2))
+    return z0_air / math.sqrt(er_eff), er_eff
+
+
+def microstrip_width_for_z0(z0_target: float, h_mm: float, er: float) -> float:
+    """Invert :func:`microstrip_z0_and_er_eff` for width (bisection on log w).
+
+    Z0 decreases monotonically with width, so a bracketed bisection converges.
+    """
+    if z0_target <= 0:
+        raise ValueError("target impedance must be positive")
+    lo, hi = h_mm * 1e-3, h_mm * 50.0
+    z_lo = microstrip_z0_and_er_eff(lo, h_mm, er)[0]
+    z_hi = microstrip_z0_and_er_eff(hi, h_mm, er)[0]
+    if not (z_hi <= z0_target <= z_lo):
+        raise ValueError(
+            f"target {z0_target} ohm is outside the realisable microstrip range "
+            f"{z_hi:.1f}-{z_lo:.1f} ohm for h={h_mm} mm, er={er}"
+        )
+    for _ in range(100):
+        mid = math.sqrt(lo * hi)
+        if microstrip_z0_and_er_eff(mid, h_mm, er)[0] > z0_target:
+            lo = mid
+        else:
+            hi = mid
+    return math.sqrt(lo * hi)
+
+
+FREE_SPACE_IMPEDANCE_OHMS = 376.730313668
+
+
+def coupled_microstrip_kirschning_jansen(w_mm: float, s_mm: float, h_mm: float, er: float) -> dict:
+    """Static even/odd-mode parameters of a symmetric edge-coupled microstrip pair.
+
+    Kirschning, M. and Jansen, R.H., "Accurate wide-range design equations for
+    the frequency-dependent characteristic of parallel coupled microstrip
+    lines", IEEE Trans. MTT-32, no. 1, pp. 83-90, Jan. 1984: the static
+    (f -> 0) even/odd effective permittivities and impedances. The
+    single-line Z0 and eps_eff are the Hammerstad-Jensen values from
+    :func:`microstrip_z0_and_er_eff`. Zero strip thickness, no dispersion.
+    Stated validity: 0.1 <= W/h <= 10, 0.1 <= S/h <= 10, 1 <= er <= 18.
+    """
+    u = w_mm / h_mm
+    g = s_mm / h_mm
+    z_l, er_eff = microstrip_z0_and_er_eff(w_mm, h_mm, er)
+
+    # Even-mode effective permittivity
+    v = u * (20 + g ** 2) / (10 + g ** 2) + g * math.exp(-g)
+    a_e = 1 + math.log((v ** 4 + (v / 52) ** 2) / (v ** 4 + 0.432)) / 49 + math.log(1 + (v / 18.1) ** 3) / 18.7
+    b_e = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
+    er_even = (er + 1) / 2 + (er - 1) / 2 * (1 + 10 / v) ** (-a_e * b_e)
+
+    # Odd-mode effective permittivity
+    a_o = 0.7287 * (er_eff - (er + 1) / 2) * (1 - math.exp(-0.179 * u))
+    b_o = 0.747 * er / (0.15 + er)
+    c_o = b_o - (b_o - 0.207) * math.exp(-0.414 * u)
+    d_o = 0.593 + 0.694 * math.exp(-0.562 * u)
+    er_odd = ((er + 1) / 2 + a_o - er_eff) * math.exp(-c_o * g ** d_o) + er_eff
+
+    # Even/odd impedances
+    q1 = 0.8695 * u ** 0.194
+    q2 = 1 + 0.7519 * g + 0.189 * g ** 2.31
+    q3 = 0.1975 + (16.6 + (8.4 / g) ** 6) ** -0.387 + math.log(g ** 10 / (1 + (g / 3.4) ** 10)) / 241
+    q4 = (2 * q1 / q2) / (math.exp(-g) * u ** q3 + (2 - math.exp(-g)) * u ** -q3)
+    q5 = 1.794 + 1.14 * math.log(1 + 0.638 / (g + 0.517 * g ** 2.43))
+    q6 = 0.2305 + math.log(g ** 10 / (1 + (g / 5.8) ** 10)) / 281.3 + math.log(1 + 0.598 * g ** 1.154) / 5.1
+    q7 = (10 + 190 * g ** 2) / (1 + 82.3 * g ** 3)
+    q8 = math.exp(-6.5 - 0.95 * math.log(g) - (g / 0.15) ** 5)
+    q9 = math.log(q7) * (q8 + 1 / 16.5)
+    q10 = (q2 * q4 - q5 * math.exp(math.log(u) * q6 * u ** -q9)) / q2
+
+    k_l = z_l * math.sqrt(er_eff) / FREE_SPACE_IMPEDANCE_OHMS
+    z_even = z_l * math.sqrt(er_eff / er_even) / (1 - k_l * q4)
+    z_odd = z_l * math.sqrt(er_eff / er_odd) / (1 - k_l * q10)
+
+    warnings = []
+    if not 0.1 <= u <= 10:
+        warnings.append(f"W/h = {u:.3g} is outside the model's 0.1-10 validity range")
+    if not 0.1 <= g <= 10:
+        warnings.append(f"S/h = {g:.3g} is outside the model's 0.1-10 validity range")
+    if not 1 <= er <= 18:
+        warnings.append(f"er = {er:.3g} is outside the model's 1-18 validity range")
+
+    return {
+        "z0_single_ohms": z_l,
+        "er_eff_single": er_eff,
+        "z0_even_ohms": z_even,
+        "z0_odd_ohms": z_odd,
+        "er_eff_even": er_even,
+        "er_eff_odd": er_odd,
+        "model": "Kirschning-Jansen 1984 static even/odd-mode coupled microstrip (IEEE Trans. MTT-32, pp. 83-90)",
+        "assumptions": "quasi-static (no dispersion), zero strip thickness, symmetric pair, single-line terms from Hammerstad-Jensen",
+        "warnings": warnings,
+    }
+
+
+def _xy_footprint(prim: dict) -> tuple:
+    """XY footprint of a primitive: ("rect", x0, y0, x1, y1) or ("circle", cx, cy, r)."""
+    ptype = prim["type"]
+    if ptype == "box":
+        (x0, y0, _), (x1, y1, _) = prim["start"], prim["stop"]
+        return ("rect", min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    if ptype == "cylinder":
+        (sx, sy, _), (ex, ey, _) = prim["start"], prim["stop"]
+        if not (math.isclose(sx, ex) and math.isclose(sy, ey)):
+            raise ValueError(f"{prim['name']}: only z-axis cylinders are supported by the clearance check")
+        return ("circle", sx, sy, prim["radius"])
+    if ptype == "disc":
+        cx, cy, _ = prim["center"]
+        return ("circle", cx, cy, prim["radius"])
+    raise ValueError(f"{prim.get('name')}: unsupported primitive type {ptype!r}")
+
+
+def _z_span(prim: dict) -> tuple[float, float]:
+    if prim["type"] == "disc":
+        z = prim["center"][2]
+        return z, z
+    z0, z1 = prim["start"][2], prim["stop"][2]
+    return min(z0, z1), max(z0, z1)
+
+
+def _footprints_touch(a: tuple, b: tuple, tol: float) -> bool:
+    """True if two closed XY footprints overlap or touch (within ``tol``)."""
+    if a[0] == "circle" and b[0] == "rect":
+        a, b = b, a
+    if a[0] == "rect" and b[0] == "rect":
+        return a[1] <= b[3] + tol and b[1] <= a[3] + tol and a[2] <= b[4] + tol and b[2] <= a[4] + tol
+    if a[0] == "rect" and b[0] == "circle":
+        _, x0, y0, x1, y1 = a
+        _, cx, cy, r = b
+        dx = max(x0 - cx, 0.0, cx - x1)
+        dy = max(y0 - cy, 0.0, cy - y1)
+        return math.hypot(dx, dy) <= r + tol
+    _, ax, ay, ar = a
+    _, bx, by, br = b
+    return math.hypot(ax - bx, ay - by) <= ar + br + tol
+
+
+def _strictly_inside_circle(fp: tuple, cx: float, cy: float, radius: float, tol: float) -> bool:
+    """True if footprint ``fp`` lies inside the circle with a gap larger than ``tol``."""
+    if fp[0] == "circle":
+        _, x, y, r = fp
+        return math.hypot(x - cx, y - cy) + r < radius - tol
+    _, x0, y0, x1, y1 = fp
+    return all(math.hypot(x - cx, y - cy) < radius - tol for x in (x0, x1) for y in (y0, y1))
+
+
 class PCBStructureDesigner:
     """Calculates PCB interconnect structures and generates OpenEMS geometry."""
 
     def __init__(self):
         self.designs: dict[str, dict] = {}
+
+    @staticmethod
+    def check_signal_ground_clearance(primitives: list[dict], tol_mm: float = 1e-6) -> list[str]:
+        """Return a list of short-circuit errors between signal and ground conductors.
+
+        Every primitive tagged ``role == "signal"`` is checked against every
+        primitive tagged ``role == "ground"``. Two conductors short if their z
+        spans overlap or touch AND their XY footprints overlap or touch, unless
+        the signal footprint lies strictly inside one of the ground primitive's
+        circular ``cutouts`` (antipads). Touching counts as a short: in FDTD a
+        shared mesh line is a galvanic connection.
+        """
+        signals = [p for p in primitives if p.get("role") == "signal"]
+        grounds = [p for p in primitives if p.get("role") == "ground"]
+        errors: list[str] = []
+        for sig in signals:
+            s_fp = _xy_footprint(sig)
+            s_z0, s_z1 = _z_span(sig)
+            for gnd in grounds:
+                g_z0, g_z1 = _z_span(gnd)
+                if s_z0 > g_z1 + tol_mm or g_z0 > s_z1 + tol_mm:
+                    continue
+                if not _footprints_touch(s_fp, _xy_footprint(gnd), tol_mm):
+                    continue
+                cleared = any(
+                    _strictly_inside_circle(s_fp, c["center"][0], c["center"][1], c["radius"], tol_mm)
+                    for c in gnd.get("cutouts", [])
+                    if c.get("shape", "circle") == "circle"
+                )
+                if not cleared:
+                    errors.append(
+                        f"signal conductor '{sig['name']}' touches ground '{gnd['name']}' "
+                        f"(z {s_z0:g}..{s_z1:g} mm vs {g_z0:g}..{g_z1:g} mm, no enclosing antipad)"
+                    )
+        return errors
 
     def create_microstrip_trace(
         self,
@@ -1832,25 +2091,15 @@ class PCBStructureDesigner:
         h = dielectric_height_mm
         er = substrate_er
 
-        # Hammerstad-Jensen effective permittivity
-        u = w / h
-        a_ham = 1 + (1 / 49) * math.log(
-            (u ** 4 + (u / 52) ** 2) / (u ** 4 + 0.432)
-        ) + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
-        b_ham = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
-        er_eff = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / u) ** (-a_ham * b_ham)
-
-        # Hammerstad characteristic impedance (free-space, then adjust for er_eff)
-        f_u = 6 + (2 * math.pi - 6) * math.exp(-(30.666 / u) ** 0.7528)
-        z0_air = (377 / (2 * math.pi)) * math.log(f_u / u + math.sqrt(1 + (2 / u) ** 2))
-        z0 = z0_air / math.sqrt(er_eff)
+        # Hammerstad-Jensen characteristic impedance and effective permittivity
+        z0, er_eff = microstrip_z0_and_er_eff(w, h, er)
 
         # Wavelength in medium
         wavelength_mm = (c / f) * 1000 / math.sqrt(er_eff)
         electrical_length_deg = 360 * trace_length_mm / wavelength_mm
 
-        # Propagation delay
-        delay_ps_per_mm = math.sqrt(er_eff) / (c / 1e9) * 1e3  # ps/mm
+        # Propagation delay: sqrt(er_eff)/c is in s/m; x1e12 ps/s, /1e3 mm/m
+        delay_ps_per_mm = math.sqrt(er_eff) / c * 1e9  # ps/mm
 
         # Simulation box sizing
         margin = max(10 * h, 5 * w, 5)  # Adequate margin for fringing fields
@@ -1945,7 +2194,9 @@ class PCBStructureDesigner:
     ) -> dict:
         """Design edge-coupled microstrip lines with impedance analysis.
 
-        Calculates even/odd mode impedances and differential/common impedances.
+        Calculates even/odd mode impedances and differential/common impedances
+        with the static Kirschning-Jansen (1984) coupled-microstrip model.
+        Zdiff = 2*Z0o, Zcm = Z0e/2, k = (Z0e - Z0o)/(Z0e + Z0o).
 
         Args:
             frequency_ghz: Analysis frequency in GHz
@@ -1967,37 +2218,22 @@ class PCBStructureDesigner:
         h = dielectric_height_mm
         er = substrate_er
 
-        # Single-line effective permittivity and Z0 (Hammerstad)
-        u = w / h
-        a_ham = 1 + (1 / 49) * math.log(
-            (u ** 4 + (u / 52) ** 2) / (u ** 4 + 0.432)
-        ) + (1 / 18.7) * math.log(1 + (u / 18.1) ** 3)
-        b_ham = 0.564 * ((er - 0.9) / (er + 3)) ** 0.053
-        er_eff = (er + 1) / 2 + ((er - 1) / 2) * (1 + 10 / u) ** (-a_ham * b_ham)
-        f_u = 6 + (2 * math.pi - 6) * math.exp(-(30.666 / u) ** 0.7528)
-        z0_single = (377 / (2 * math.pi)) * math.log(
-            f_u / u + math.sqrt(1 + (2 / u) ** 2)
-        ) / math.sqrt(er_eff)
+        if w <= 0 or s <= 0 or h <= 0 or er < 1:
+            return {"success": False, "error": "trace_width_mm, spacing_mm and dielectric_height_mm must be > 0 and substrate_er >= 1"}
 
-        # Even/odd mode impedances using Kirschning-Jansen approximation
-        # Coupling factor based on s/h ratio
-        g = s / h
-        coupling_factor = math.exp(-0.627 * g) if g < 10 else 0.0
+        # Even/odd-mode quasi-static model: Kirschning & Jansen (1984).
+        cm = coupled_microstrip_kirschning_jansen(w, s, h, er)
+        z0_single = cm["z0_single_ohms"]
+        z_even = cm["z0_even_ohms"]
+        z_odd = cm["z0_odd_ohms"]
+        er_even = cm["er_eff_even"]
+        er_odd = cm["er_eff_odd"]
 
-        # Even mode: fields add constructively -> higher Z
-        z_even = z0_single * (1 + coupling_factor * 0.65 * (1 - math.exp(-1.0 / g)))
-        # Odd mode: fields cancel partially -> lower Z
-        z_odd = z0_single * (1 - coupling_factor * 0.65 * (1 - math.exp(-1.0 / g)))
-
-        # Even/odd effective permittivities (simplified)
-        er_even = er_eff * (1 + 0.02 * coupling_factor)
-        er_odd = er_eff * (1 - 0.02 * coupling_factor)
-
-        # Differential and common-mode impedances
+        # Differential and common-mode impedances (uncoupled-termination definitions)
         z_diff = 2 * z_odd
         z_common = z_even / 2
 
-        # Coupling coefficient
+        # Coupling coefficient (voltage coupling of a matched coupled section)
         k_coupling = (z_even - z_odd) / (z_even + z_odd)
 
         # Wavelengths
@@ -2044,8 +2280,12 @@ class PCBStructureDesigner:
                 "z_diff_ohms": round(z_diff, 2),
                 "z_common_ohms": round(z_common, 2),
                 "coupling_coefficient": round(k_coupling, 4),
+                "effective_er_single": round(cm["er_eff_single"], 4),
                 "effective_er_even": round(er_even, 4),
                 "effective_er_odd": round(er_odd, 4),
+                "model": cm["model"],
+                "model_assumptions": cm["assumptions"],
+                "model_warnings": cm["warnings"],
             },
             "geometry": {
                 "unit": "mm",
@@ -2127,61 +2367,178 @@ class PCBStructureDesigner:
         dielectric_height_mm: float,
         substrate_er: float = 4.2,
         name: str = "Via Transition",
+        antipad_mm: float | None = None,
+        feed_trace_width_mm: float | None = None,
+        feed_target_z0_ohms: float = 50.0,
+        reference_planes: int = 1,
     ) -> dict:
-        """Design a via transition between two layers.
+        """Design a signal via transition from a bottom-layer to a top-layer microstrip.
 
-        Models via barrel, pads, anti-pads, and feed traces on both layers.
+        Stackup (z up): bottom signal copper in [-t, 0], dielectric 0..h, top
+        signal copper in [h, h + t], and ``reference_planes`` ground planes of
+        thickness t evenly spaced inside the dielectric. Every reference plane
+        has a circular antipad (clearance hole) around the barrel, so the signal
+        conductors never touch ground. With two or more planes, four ground
+        stitching vias tie the planes together next to the signal via.
+
+        Analytical model (coaxial approximation, return current at the antipad
+        radius over the full barrel length h):
+            L = mu0 * h / (2 pi) * ln(D_antipad / d_drill)
+            C = 2 pi eps0 er h / ln(D_antipad / d_drill)  (+ pad-over-plane overlap
+                capacitance when the pad is larger than the antipad)
+            Z_via = sqrt(L / C),  f_LC = 1 / (2 pi sqrt(L C))
+        so the reported Z_via, L and C are always mutually consistent.
 
         Args:
             frequency_ghz: Analysis frequency in GHz
-            drill_mm: Via drill diameter in mm
-            pad_mm: Via pad diameter in mm
-            dielectric_height_mm: Dielectric thickness between layers in mm
+            drill_mm: Via drill (barrel) diameter in mm
+            pad_mm: Via pad diameter on the two signal layers in mm
+            dielectric_height_mm: Total dielectric between the two signal layers (via length) in mm
             substrate_er: Substrate dielectric constant (default 4.2)
             name: Design name
+            antipad_mm: Antipad (clearance) diameter in each reference plane; default pad + 0.25 mm
+            feed_trace_width_mm: Feed microstrip width; if omitted it is derived from
+                ``feed_target_z0_ohms`` with the Hammerstad-Jensen microstrip formula
+                at the feed dielectric height
+            feed_target_z0_ohms: Target feed impedance, also the port reference impedance (default 50)
+            reference_planes: Number of ground planes between the signal layers (default 1)
 
         Returns:
-            Design specification with estimated parasitics
+            Design specification with estimated parasitics and validated geometry
         """
         design_id = str(uuid4())
-        c = 299792458
-        f = frequency_ghz * 1e9
         h = dielectric_height_mm
         er = substrate_er
+        t = COPPER_THICKNESS_MM
         mu0 = 4 * math.pi * 1e-7
         eps0 = 8.854187817e-12
 
-        # Via barrel inductance (simplified coaxial model)
-        # L = (mu0 * h) / (2*pi) * ln(antipad/drill)
-        # Assume antipad = pad + 0.25mm clearance
-        antipad_mm = pad_mm + 0.25
-        if antipad_mm > drill_mm:
-            l_via = (mu0 * (h / 1000)) / (2 * math.pi) * math.log(antipad_mm / drill_mm)
+        def fail(msg: str) -> dict:
+            return {"success": False, "error": msg}
+
+        if drill_mm <= 0 or h <= 0:
+            return fail("drill_mm and dielectric_height_mm must be positive")
+        if pad_mm <= drill_mm:
+            return fail(f"pad_mm ({pad_mm}) must be larger than drill_mm ({drill_mm})")
+        n_planes = int(reference_planes)
+        if n_planes < 1:
+            return fail("reference_planes must be >= 1 (a via transition needs a return path)")
+        antipad = pad_mm + 0.25 if antipad_mm is None else float(antipad_mm)
+        if antipad <= drill_mm:
+            return fail(
+                f"antipad_mm ({antipad}) must be larger than drill_mm ({drill_mm}): "
+                "the barrel would short to every reference plane"
+            )
+        pitch = h / (n_planes + 1)
+        if pitch <= t:
+            return fail(
+                f"{n_planes} reference plane(s) of {t} mm copper do not fit in {h} mm of dielectric"
+            )
+        plane_z = [pitch * (k + 1) for k in range(n_planes)]
+        # Feed microstrip height: signal copper surface (z=0 or z=h) to the
+        # facing surface of the nearest reference plane.
+        feed_h = pitch - t / 2
+
+        if feed_trace_width_mm is None:
+            try:
+                feed_w = microstrip_width_for_z0(feed_target_z0_ohms, feed_h, er)
+            except ValueError as exc:
+                return fail(f"cannot derive feed width: {exc}")
+            feed_width_source = f"derived for {feed_target_z0_ohms} ohm (Hammerstad-Jensen, h={feed_h:.4g} mm)"
         else:
-            l_via = mu0 * (h / 1000) / (2 * math.pi) * 0.5  # fallback
+            if feed_trace_width_mm <= 0:
+                return fail("feed_trace_width_mm must be positive")
+            feed_w = float(feed_trace_width_mm)
+            feed_width_source = "user"
+        feed_z0, feed_er_eff = microstrip_z0_and_er_eff(feed_w, feed_h, er)
+        z_ref = float(feed_target_z0_ohms)
 
-        l_via_ph = l_via * 1e12  # Convert to pH
-
-        # Via pad capacitance (parallel plate model for pad-to-plane)
-        # C = eps0 * er * pi * (pad^2 - drill^2) / (4 * h)
-        pad_area = math.pi * ((pad_mm / 2000) ** 2 - (drill_mm / 2000) ** 2)
-        c_via = eps0 * er * pad_area / (h / 1000)
-        c_via_ff = c_via * 1e15  # Convert to fF
-
-        # Via impedance (coaxial approximation)
-        z_via = (60 / math.sqrt(er)) * math.log(antipad_mm / drill_mm)
-
-        # Resonance frequency of via
+        # Coaxial via model: L and C from the same geometry, Z = sqrt(L/C).
+        h_m = h / 1000
+        ln_ratio = math.log(antipad / drill_mm)
+        l_via = mu0 * h_m / (2 * math.pi) * ln_ratio
+        c_barrel = 2 * math.pi * eps0 * er * h_m / ln_ratio
+        if pad_mm > antipad:
+            overlap_m2 = math.pi * ((pad_mm / 2000) ** 2 - (antipad / 2000) ** 2)
+            c_pads = 2 * eps0 * er * overlap_m2 / (feed_h / 1000)
+        else:
+            c_pads = 0.0
+        c_via = c_barrel + c_pads
+        z_via = math.sqrt(l_via / c_via)
         f_res_ghz = 1 / (2 * math.pi * math.sqrt(l_via * c_via)) / 1e9
 
-        # Feed trace width for ~50 ohm (rough approximation)
-        feed_width_mm = max(drill_mm, 0.2)
         feed_length_mm = max(3 * pad_mm, 2)
-
-        # Simulation box
         margin = max(10 * h, 5 * pad_mm, 5)
         box_xy = 2 * (feed_length_mm + pad_mm / 2 + margin)
-        ground_thickness = 0.035
+        half = box_xy / 2
+        x_port1 = -pad_mm / 2 - feed_length_mm
+        x_port2 = pad_mm / 2 + feed_length_mm
+
+        primitives: list[dict] = [
+            {
+                "type": "box", "name": "substrate", "role": "dielectric", "material": "substrate",
+                "start": [-half, -half, 0], "stop": [half, half, h],
+            },
+        ]
+        for k, z in enumerate(plane_z, start=1):
+            primitives.append({
+                "type": "box", "name": f"ref_plane_{k}", "role": "ground", "material": "PEC",
+                "start": [-half, -half, z - t / 2], "stop": [half, half, z + t / 2],
+                "cutouts": [{"shape": "circle", "center": [0, 0], "radius": antipad / 2, "name": "antipad"}],
+            })
+        if n_planes >= 2:
+            s = (antipad / 2 + drill_mm) / math.sqrt(2)
+            for i, (sx, sy) in enumerate([(s, s), (-s, s), (-s, -s), (s, -s)], start=1):
+                primitives.append({
+                    "type": "cylinder", "name": f"stitch_via_{i}", "role": "ground", "material": "PEC",
+                    "start": [sx, sy, plane_z[0] - t / 2], "stop": [sx, sy, plane_z[-1] + t / 2],
+                    "radius": drill_mm / 2,
+                })
+        primitives += [
+            {
+                "type": "cylinder", "name": "via_barrel", "role": "signal", "material": "PEC",
+                "start": [0, 0, 0], "stop": [0, 0, h], "radius": drill_mm / 2,
+            },
+            {
+                "type": "cylinder", "name": "pad_bottom", "role": "signal", "material": "PEC",
+                "start": [0, 0, -t], "stop": [0, 0, 0], "radius": pad_mm / 2,
+            },
+            {
+                "type": "cylinder", "name": "pad_top", "role": "signal", "material": "PEC",
+                "start": [0, 0, h], "stop": [0, 0, h + t], "radius": pad_mm / 2,
+            },
+            {
+                "type": "box", "name": "feed_trace_bottom", "role": "signal", "material": "PEC",
+                "start": [x_port1, -feed_w / 2, -t], "stop": [0, feed_w / 2, 0],
+            },
+            {
+                "type": "box", "name": "feed_trace_top", "role": "signal", "material": "PEC",
+                "start": [0, -feed_w / 2, h], "stop": [x_port2, feed_w / 2, h + t],
+            },
+        ]
+        # Lumped ports span from the facing reference-plane surface to the
+        # signal copper, oriented reference -> signal on both ports.
+        z_p1_ref = plane_z[0] - t / 2
+        z_p2_ref = plane_z[-1] + t / 2
+        ports = [
+            {
+                "type": "lumped", "number": 1, "direction": "z", "impedance": z_ref,
+                "start": [x_port1, -feed_w / 2, z_p1_ref], "stop": [x_port1, feed_w / 2, 0],
+                "position": [x_port1, 0, z_p1_ref / 2],
+                "description": "bottom-layer feed (ref_plane_1 -> bottom signal)",
+            },
+            {
+                "type": "lumped", "number": 2, "direction": "z", "impedance": z_ref,
+                "start": [x_port2, -feed_w / 2, z_p2_ref], "stop": [x_port2, feed_w / 2, h],
+                "position": [x_port2, 0, (z_p2_ref + h) / 2],
+                "description": f"top-layer feed (ref_plane_{n_planes} -> top signal)",
+            },
+        ]
+
+        errors = self.check_signal_ground_clearance(primitives)
+        if errors:
+            return {"success": False, "error": "invalid via geometry: " + "; ".join(errors),
+                    "geometry_errors": errors}
 
         design = {
             "id": design_id,
@@ -2193,101 +2550,39 @@ class PCBStructureDesigner:
                 "dielectric_height_mm": h,
                 "drill_mm": drill_mm,
                 "pad_mm": pad_mm,
+                "antipad_mm": antipad,
+                "reference_planes": n_planes,
+                "feed_target_z0_ohms": z_ref,
+                "copper_thickness_mm": t,
             },
             "dimensions": {
                 "drill_diameter_mm": round(drill_mm, 4),
                 "pad_diameter_mm": round(pad_mm, 4),
-                "antipad_diameter_mm": round(antipad_mm, 4),
+                "antipad_diameter_mm": round(antipad, 4),
                 "dielectric_height_mm": round(h, 4),
-                "feed_trace_width_mm": round(feed_width_mm, 3),
+                "reference_plane_z_mm": [round(z, 4) for z in plane_z],
+                "feed_dielectric_height_mm": round(feed_h, 4),
+                "feed_trace_width_mm": round(feed_w, 4),
+                "feed_trace_width_source": feed_width_source,
                 "feed_trace_length_mm": round(feed_length_mm, 3),
+                "board_size_mm": round(box_xy, 3),
             },
             "calculated": {
-                "inductance_ph": round(l_via_ph, 1),
-                "capacitance_ff": round(c_via_ff, 1),
+                "inductance_ph": round(l_via * 1e12, 2),
+                "capacitance_ff": round(c_via * 1e15, 2),
+                "capacitance_barrel_ff": round(c_barrel * 1e15, 2),
+                "capacitance_pad_overlap_ff": round(c_pads * 1e15, 2),
                 "z_via_ohms": round(z_via, 2),
                 "resonance_ghz": round(f_res_ghz, 2),
+                "feed_z0_ohms": round(feed_z0, 2),
+                "feed_effective_er": round(feed_er_eff, 4),
+                "model": "coaxial barrel: L = mu0 h ln(D/d)/(2 pi), C = 2 pi eps h / ln(D/d) "
+                         "(+ pad/plane overlap), Z_via = sqrt(L/C)",
             },
             "geometry": {
                 "unit": "mm",
-                "primitives": [
-                    {
-                        "type": "box",
-                        "name": "ground_plane_bottom",
-                        "material": "PEC",
-                        "start": [-box_xy / 2, -box_xy / 2, -ground_thickness],
-                        "stop": [box_xy / 2, box_xy / 2, 0],
-                    },
-                    {
-                        "type": "box",
-                        "name": "substrate",
-                        "material": "substrate",
-                        "start": [-box_xy / 2, -box_xy / 2, 0],
-                        "stop": [box_xy / 2, box_xy / 2, h],
-                    },
-                    {
-                        "type": "cylinder",
-                        "name": "via_barrel",
-                        "material": "PEC",
-                        "start": [0, 0, 0],
-                        "stop": [0, 0, h],
-                        "radius": drill_mm / 2,
-                    },
-                    {
-                        "type": "disc",
-                        "name": "pad_bottom",
-                        "material": "PEC",
-                        "center": [0, 0, 0],
-                        "radius": pad_mm / 2,
-                    },
-                    {
-                        "type": "disc",
-                        "name": "pad_top",
-                        "material": "PEC",
-                        "center": [0, 0, h],
-                        "radius": pad_mm / 2,
-                    },
-                    {
-                        "type": "box",
-                        "name": "feed_trace_bottom",
-                        "material": "PEC",
-                        "start": [-pad_mm / 2 - feed_length_mm, -feed_width_mm / 2, 0],
-                        "stop": [-pad_mm / 2, feed_width_mm / 2, 0],
-                    },
-                    {
-                        "type": "box",
-                        "name": "feed_trace_top",
-                        "material": "PEC",
-                        "start": [pad_mm / 2, -feed_width_mm / 2, h],
-                        "stop": [pad_mm / 2 + feed_length_mm, feed_width_mm / 2, h],
-                    },
-                ],
-                "ports": [
-                    {
-                        "type": "lumped",
-                        "number": 1,
-                        "position": [
-                            -pad_mm / 2 - feed_length_mm,
-                            0,
-                            ground_thickness / 2,
-                        ],
-                        "direction": "z",
-                        "impedance": 50,
-                        "description": "bottom layer feed",
-                    },
-                    {
-                        "type": "lumped",
-                        "number": 2,
-                        "position": [
-                            pad_mm / 2 + feed_length_mm,
-                            0,
-                            h - ground_thickness / 2,
-                        ],
-                        "direction": "z",
-                        "impedance": 50,
-                        "description": "top layer feed",
-                    },
-                ],
+                "primitives": primitives,
+                "ports": ports,
             },
         }
 
@@ -2314,6 +2609,17 @@ class PCBStructureDesigner:
         elif design_type == "coupled_lines":
             script = self._generate_coupled_lines_script(design)
         elif design_type == "via_transition":
+            # Refuse to emit a simulation of a shorted structure: a signal
+            # conductor touching a reference plane makes every S-parameter
+            # meaningless while the simulation still "runs fine".
+            errors = self.check_signal_ground_clearance(design["geometry"]["primitives"])
+            if errors:
+                return {
+                    "success": False,
+                    "design_id": design_id,
+                    "error": "Geometry invalid, script not generated: " + "; ".join(errors),
+                    "geometry_errors": errors,
+                }
             script = self._generate_via_transition_script(design)
         else:
             return {"success": False, "error": f"Unknown PCB structure type: {design_type}"}
@@ -2710,23 +3016,102 @@ print("S-parameter plot saved to coupled_lines_s_params.png")
 '''
 
     def _generate_via_transition_script(self, design: dict) -> str:
-        """Generate OpenEMS script for via transition simulation."""
-        dims = design["dimensions"]
+        """Generate an openEMS script for the via transition.
+
+        The CSXCAD geometry is emitted directly from ``design["geometry"]``,
+        which :meth:`generate_openems_script` has already checked with
+        :meth:`check_signal_ground_clearance`, so the simulated structure is the
+        validated one. Priorities: substrate 1 < ground 10 < antipad clearance 20
+        < signal 30, so the antipad removes plane copper but never signal copper.
+        """
         params = design["parameters"]
+        dims = design["dimensions"]
         calc = design["calculated"]
         geom = design["geometry"]
+        h = params["dielectric_height_mm"]
+        t = params.get("copper_thickness_mm", COPPER_THICKNESS_MM)
 
-        # Extract feed positions from geometry ports
-        port1_x = geom["ports"][0]["position"][0]
-        port2_x = geom["ports"][1]["position"][0]
+        def v(x: float) -> str:
+            return repr(round(float(x), 6))
+
+        def vec(p) -> str:
+            return "[" + ", ".join(v(c) for c in p) + "]"
+
+        geo_lines: list[str] = []
+        xs: set[float] = set()
+        ys: set[float] = set()
+        zs: set[float] = set()
+        for p in geom["primitives"]:
+            role = p.get("role")
+            if p["type"] == "box":
+                xs.update((p["start"][0], p["stop"][0]))
+                ys.update((p["start"][1], p["stop"][1]))
+                zs.update((p["start"][2], p["stop"][2]))
+            else:
+                cx, cy = p["start"][0], p["start"][1]
+                xs.update((cx - p["radius"], cx + p["radius"]))
+                ys.update((cy - p["radius"], cy + p["radius"]))
+                zs.update((p["start"][2], p["stop"][2]))
+
+            if role == "dielectric":
+                geo_lines.append(f"# {p['name']}")
+                geo_lines.append(f"substrate.AddBox(start={vec(p['start'])}, stop={vec(p['stop'])}, priority=1)")
+            elif role == "ground" and p["type"] == "box":
+                geo_lines.append(f"# Reference plane {p['name']}")
+                geo_lines.append(f"metal.AddBox(start={vec(p['start'])}, stop={vec(p['stop'])}, priority=10)")
+                z0, z1 = p["start"][2], p["stop"][2]
+                for cut in p.get("cutouts", []):
+                    cx, cy = cut["center"]
+                    geo_lines.append(f"# Antipad clearance in {p['name']} (r = {v(cut['radius'])} mm)")
+                    geo_lines.append(
+                        f"substrate.AddCylinder(start={vec([cx, cy, z0])}, stop={vec([cx, cy, z1])}, "
+                        f"radius={v(cut['radius'])}, priority=20)"
+                    )
+                    xs.update((cx - cut["radius"], cx + cut["radius"]))
+                    ys.update((cy - cut["radius"], cy + cut["radius"]))
+            elif role in ("ground", "signal"):
+                prio = 10 if role == "ground" else 30
+                geo_lines.append(f"# {p['name']} ({role})")
+                if p["type"] == "box":
+                    geo_lines.append(
+                        f"metal.AddBox(start={vec(p['start'])}, stop={vec(p['stop'])}, priority={prio})"
+                    )
+                else:
+                    geo_lines.append(
+                        f"metal.AddCylinder(start={vec(p['start'])}, stop={vec(p['stop'])}, "
+                        f"radius={v(p['radius'])}, priority={prio})"
+                    )
+            else:
+                raise ValueError(f"primitive {p.get('name')} has unknown role {role!r}")
+
+        port_lines: list[str] = []
+        for port in geom["ports"]:
+            n = port["number"]
+            port_lines.append(f"# Port {n}: {port['description']}")
+            port_lines.append(
+                f"port{n} = FDTD.AddLumpedPort({n}, z_ref, start={vec(port['start'])}, "
+                f"stop={vec(port['stop'])}, p_dir='z', excite={1 if n == 1 else 0})"
+            )
+            xs.add(port["start"][0])
+            zs.update((port["start"][2], port["stop"][2]))
+
+        geometry_code = "\n".join(geo_lines)
+        ports_code = "\n".join(port_lines)
+        key_x = vec(sorted(xs))
+        key_y = vec(sorted(ys))
+        key_z = vec(sorted(zs))
+        via_region = max(dims["pad_diameter_mm"], dims["antipad_diameter_mm"])
+        board_half = dims["board_size_mm"] / 2
 
         return f'''#!/usr/bin/env python3
 """OpenEMS Via Transition Simulation
 Design: {design["name"]}
 Frequency: {design["frequency_ghz"]} GHz
-Via: drill={params["drill_mm"]}mm, pad={params["pad_mm"]}mm
-Estimated L={calc["inductance_ph"]} pH, C={calc["capacitance_ff"]} fF
-Generated by mcp-openems
+Via: drill={params["drill_mm"]} mm, pad={params["pad_mm"]} mm, antipad={params["antipad_mm"]} mm
+Reference planes: {params["reference_planes"]} at z = {dims["reference_plane_z_mm"]} mm (each with antipad)
+Feed: {dims["feed_trace_width_mm"]} mm wide ({dims["feed_trace_width_source"]}), Z0 ~ {calc["feed_z0_ohms"]} ohm
+Analytical (coaxial model): L={calc["inductance_ph"]} pH, C={calc["capacitance_ff"]} fF, Z_via=sqrt(L/C)={calc["z_via_ohms"]} ohm
+Generated by mcp-openems (geometry validated: no signal conductor touches ground)
 """
 
 import os
@@ -2739,12 +3124,9 @@ from openEMS.physical_constants import C0
 f0 = {design["frequency_ghz"]}e9
 fc = f0 * 0.5
 substrate_er = {params["substrate_er"]}
-substrate_h = {params["dielectric_height_mm"]}
-drill_r = {params["drill_mm"]} / 2  # Via drill radius
-pad_r = {params["pad_mm"]} / 2  # Pad radius
-antipad_r = {dims["antipad_diameter_mm"]} / 2  # Antipad radius
-feed_w = {dims["feed_trace_width_mm"]}
-feed_l = {dims["feed_trace_length_mm"]}
+substrate_h = {v(h)}  # mm, via length between signal layers
+copper_t = {v(t)}  # mm
+z_ref = {v(params["feed_target_z0_ohms"])}  # ohm, port reference impedance (both ports)
 
 # Simulation setup
 unit = 1e-3
@@ -2758,108 +3140,30 @@ FDTD.SetCSX(CSX)
 substrate = CSX.AddMaterial('substrate', epsilon=substrate_er)
 metal = CSX.AddMetal('PEC')
 
-# Ground/reference planes with antipad cutout
-box_xy = {round(max(10 * params["dielectric_height_mm"], 5 * params["pad_mm"], 5) * 2 + 2 * (dims["feed_trace_length_mm"] + params["pad_mm"] / 2), 2)}
+# Geometry (priorities: substrate 1 < ground 10 < antipad 20 < signal 30)
+{geometry_code}
 
-# Bottom reference plane (with clearance hole for via)
-metal.AddBox(
-    start=[-box_xy/2, -box_xy/2, -0.035],
-    stop=[box_xy/2, box_xy/2, 0],
-    priority=5
-)
+# Lumped ports: each spans reference-plane surface -> signal copper
+{ports_code}
 
-# Substrate
-substrate.AddBox(
-    start=[-box_xy/2, -box_xy/2, 0],
-    stop=[box_xy/2, box_xy/2, substrate_h],
-    priority=1
-)
-
-# Via barrel (cylinder through substrate)
-n_cyl = 16  # Polygon approximation segments
-theta = np.linspace(0, 2*np.pi, n_cyl+1)[:-1]
-
-# Via barrel as cylinder
-metal.AddCylinder(
-    start=[0, 0, 0],
-    stop=[0, 0, substrate_h],
-    radius=drill_r,
-    priority=15
-)
-
-# Bottom pad (annular ring on bottom layer)
-metal.AddCylinder(
-    start=[0, 0, -0.035],
-    stop=[0, 0, 0],
-    radius=pad_r,
-    priority=15
-)
-
-# Top pad (annular ring on top layer)
-metal.AddCylinder(
-    start=[0, 0, substrate_h],
-    stop=[0, 0, substrate_h + 0.035],
-    radius=pad_r,
-    priority=15
-)
-
-# Feed trace on bottom layer (extending in -x direction)
-metal.AddBox(
-    start=[-pad_r - feed_l, -feed_w/2, -0.035],
-    stop=[-pad_r, feed_w/2, 0],
-    priority=10
-)
-
-# Feed trace on top layer (extending in +x direction)
-metal.AddBox(
-    start=[pad_r, -feed_w/2, substrate_h],
-    stop=[pad_r + feed_l, feed_w/2, substrate_h + 0.035],
-    priority=10
-)
-
-# Port 1: Bottom layer feed
-port1 = FDTD.AddLumpedPort(
-    1, 50,
-    start=[-pad_r - feed_l, -feed_w/2, -0.035],
-    stop=[-pad_r - feed_l, feed_w/2, 0],
-    p_dir='z',
-    excite=1
-)
-
-# Port 2: Top layer feed
-port2 = FDTD.AddLumpedPort(
-    2, 50,
-    start=[pad_r + feed_l, -feed_w/2, substrate_h],
-    stop=[pad_r + feed_l, feed_w/2, substrate_h + 0.035],
-    p_dir='z',
-    excite=0
-)
-
-# Mesh
+# Mesh: key coordinates of every primitive, fine region around the via,
+# air margin of a quarter wavelength at f_max, then smoothed.
 mesh = CSX.GetGrid()
 mesh.SetDeltaUnit(unit)
-
 resolution = C0 / (f0 + fc) / unit / 20
-via_res = min(drill_r, substrate_h / 4, resolution / 2)
+air = C0 / (f0 + fc) / unit / 4
+via_region = {v(via_region)}
+fine = min({v(params["drill_mm"])} / 4, copper_t * 2, resolution / 4)
+board_half = {v(board_half)}
 
-# Fine mesh around via
-via_region = max(pad_r, antipad_r) * 2
-mesh.AddLine('x', np.concatenate([
-    np.arange(-box_xy/2 - 10, -via_region, resolution),
-    np.linspace(-via_region, via_region, max(20, int(2*via_region / via_res))),
-    np.arange(via_region, box_xy/2 + 10, resolution)
-]))
-mesh.AddLine('y', np.concatenate([
-    np.arange(-box_xy/2 - 10, -via_region, resolution),
-    np.linspace(-via_region, via_region, max(20, int(2*via_region / via_res))),
-    np.arange(via_region, box_xy/2 + 10, resolution)
-]))
-mesh.AddLine('z', np.concatenate([
-    np.arange(-10, -0.035, resolution),
-    np.linspace(-0.035, substrate_h + 0.035,
-                max(8, int((substrate_h + 0.07) / (substrate_h/6)) + 1)),
-    np.arange(substrate_h + 0.035, 10*substrate_h + 10, resolution)
-]))
+mesh.AddLine('x', {key_x})
+mesh.AddLine('y', {key_y})
+mesh.AddLine('z', {key_z})
+for axis in ('x', 'y'):
+    mesh.AddLine(axis, np.linspace(-via_region, via_region, max(20, int(2 * via_region / fine))))
+    mesh.AddLine(axis, [-board_half - air, board_half + air])
+mesh.AddLine('z', [-copper_t - air, substrate_h + copper_t + air])
+mesh.SmoothMeshLines('all', resolution, 1.4)
 
 # Run simulation
 import tempfile
@@ -2871,29 +3175,29 @@ os.makedirs(Sim_Path)
 
 FDTD.Run(Sim_Path, verbose=3, cleanup=True)
 
-# Post-processing
+# Post-processing: S-parameters from port incident/reflected waves
+# (openEMS convention: Sij = port_i.uf_ref / port_j.uf_inc, both ports
+# evaluated against the same reference impedance)
 f = np.linspace(max(1e6, f0 - fc), f0 + fc, 401)
-port1.CalcPort(Sim_Path, f)
-port2.CalcPort(Sim_Path, f)
+port1.CalcPort(Sim_Path, f, ref_impedance=z_ref)
+port2.CalcPort(Sim_Path, f, ref_impedance=z_ref)
 
 s11 = port1.uf_ref / port1.uf_inc
 s21 = port2.uf_ref / port1.uf_inc
 s11_dB = 20 * np.log10(np.abs(s11))
 s21_dB = 20 * np.log10(np.abs(s21))
 
-# Extract via equivalent circuit parameters from S-parameters
-# Z_via approx from S11: Z = Z0 * (1+S11)/(1-S11)
-mid = len(f) // 2
-z_via_sim = 50 * (1 + s11[mid]) / (1 - s11[mid])
+# Input impedance seen at port 1 (includes both feed lines, not the via alone)
+zin1 = z_ref * (1 + s11) / (1 - s11)
 
-print(f"=== Via Transition Results ===")
-print(f"Analytical estimates: L = {calc["inductance_ph"]} pH, C = {calc["capacitance_ff"]} fF")
-print(f"Resonance estimate: {calc["resonance_ghz"]} GHz")
-print(f"")
-print(f"At {{f0/1e9:.2f}} GHz:")
+mid = len(f) // 2
+print("=== Via Transition Results ===")
+print("Analytical (coaxial model): L = {calc["inductance_ph"]} pH, C = {calc["capacitance_ff"]} fF, "
+      "Z_via = {calc["z_via_ohms"]} ohm, f_LC = {calc["resonance_ghz"]} GHz")
+print(f"At {{f[mid]/1e9:.2f}} GHz:")
 print(f"  S11 = {{s11_dB[mid]:.1f}} dB")
 print(f"  S21 = {{s21_dB[mid]:.2f}} dB")
-print(f"  Via impedance (from S11) = {{np.abs(z_via_sim):.1f}} ohms")
+print(f"  Zin at port 1 = {{zin1[mid].real:.1f}} {{zin1[mid].imag:+.1f}}j ohm")
 
 # Plot
 import matplotlib.pyplot as plt
@@ -2908,12 +3212,11 @@ ax1.grid(True)
 ax1.legend()
 ax1.set_ylim([-40, 5])
 
-# Smith chart data
-ax2.plot(f/1e9, np.real(z_via_sim * np.ones_like(f)), 'b-', label='Re(Z)')
-ax2.plot(f/1e9, np.imag(50 * (1 + s11) / (1 - s11)), 'r-', label='Im(Z)')
+ax2.plot(f/1e9, np.real(zin1), 'b-', label='Re(Zin)')
+ax2.plot(f/1e9, np.imag(zin1), 'r-', label='Im(Zin)')
 ax2.set_xlabel('Frequency (GHz)')
 ax2.set_ylabel('Impedance (ohms)')
-ax2.set_title('Via Impedance vs Frequency')
+ax2.set_title('Input Impedance at Port 1')
 ax2.grid(True)
 ax2.legend()
 
@@ -3029,7 +3332,11 @@ TOOLS = [
     ),
     Tool(
         name="openems_create_horn",
-        description="Design a pyramidal horn antenna for specified gain. Calculates aperture dimensions and length.",
+        description=(
+            "Design a pyramidal horn antenna for specified gain. Calculates aperture dimensions and length. "
+            "The reported gain is computed from the generated aperture: G = e_ap*4*pi*A/lambda^2 "
+            "(default e_ap = 0.51, optimum pyramidal horn)."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -3041,6 +3348,19 @@ TOOLS = [
                     "type": "number",
                     "description": "Target gain in dBi (typically 10-25)",
                     "default": 15,
+                },
+                "aperture_efficiency": {
+                    "type": "number",
+                    "description": "Aperture efficiency e_ap (default 0.51)",
+                    "default": 0.51,
+                },
+                "aperture_width_mm": {
+                    "type": "number",
+                    "description": "Use this aperture width instead of sizing from gain_dbi (requires aperture_height_mm)",
+                },
+                "aperture_height_mm": {
+                    "type": "number",
+                    "description": "Use this aperture height instead of sizing from gain_dbi (requires aperture_width_mm)",
                 },
                 "name": {
                     "type": "string",
@@ -3212,7 +3532,7 @@ TOOLS = [
     ),
     Tool(
         name="openems_create_coupled_lines",
-        description="Design edge-coupled microstrip lines. Calculates even/odd mode impedances, differential/common-mode impedances, and coupling coefficient. 4-port geometry for NEXT/FEXT analysis.",
+        description="Design edge-coupled microstrip lines. Calculates even/odd mode impedances (static Kirschning-Jansen 1984 model), differential (2*Z0o) and common-mode (Z0e/2) impedances, and coupling coefficient (Z0e-Z0o)/(Z0e+Z0o). 4-port geometry for NEXT/FEXT analysis.",
         input_schema={
             "type": "object",
             "properties": {
@@ -3251,7 +3571,13 @@ TOOLS = [
     ),
     Tool(
         name="openems_create_via",
-        description="Design a via transition between two PCB layers. Models via barrel, pads, and feed traces. Estimates parasitic inductance and capacitance. 2-port geometry for reflection/transmission analysis.",
+        description=(
+            "Design a signal via transition from a bottom-layer to a top-layer microstrip. Models via barrel, "
+            "pads, feed traces and N reference planes between the signal layers, each with an antipad "
+            "clearance; geometry is validated so no signal conductor touches ground. Reports coaxial-model "
+            "L, C and Z_via = sqrt(L/C). Feed width is user-supplied or derived from the target impedance. "
+            "2-port geometry with lumped ports from reference plane to signal for S11/S21 analysis."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -3269,12 +3595,31 @@ TOOLS = [
                 },
                 "dielectric_height_mm": {
                     "type": "number",
-                    "description": "Dielectric thickness between layers in mm",
+                    "description": "Total dielectric thickness between the two signal layers (via length) in mm",
                 },
                 "substrate_er": {
                     "type": "number",
                     "description": "Substrate dielectric constant (default 4.2)",
                     "default": 4.2,
+                },
+                "antipad_mm": {
+                    "type": "number",
+                    "description": "Antipad (clearance) diameter in every reference plane in mm (default pad + 0.25)",
+                },
+                "feed_trace_width_mm": {
+                    "type": "number",
+                    "description": "Feed microstrip width in mm. Omit to derive it from feed_target_z0_ohms.",
+                },
+                "feed_target_z0_ohms": {
+                    "type": "number",
+                    "description": "Target feed impedance and port reference impedance in ohms (default 50)",
+                    "default": 50,
+                },
+                "reference_planes": {
+                    "type": "integer",
+                    "description": "Number of ground planes between the signal layers (default 1)",
+                    "default": 1,
+                    "minimum": 1,
                 },
                 "name": {
                     "type": "string",
@@ -3322,6 +3667,9 @@ async def handle_call_tool(ctx, params: CallToolRequestParams) -> CallToolResult
                 frequency_ghz=arguments["frequency_ghz"],
                 gain_dbi=arguments.get("gain_dbi", 15),
                 name=arguments.get("name", "Horn Antenna"),
+                aperture_efficiency=arguments.get("aperture_efficiency", 0.51),
+                aperture_width_mm=arguments.get("aperture_width_mm"),
+                aperture_height_mm=arguments.get("aperture_height_mm"),
             )
         elif name == "openems_create_helix":
             result = designer.create_helix_antenna(
@@ -3443,6 +3791,10 @@ async def handle_call_tool(ctx, params: CallToolRequestParams) -> CallToolResult
                 dielectric_height_mm=arguments["dielectric_height_mm"],
                 substrate_er=arguments.get("substrate_er", 4.2),
                 name=arguments.get("name", "Via Transition"),
+                antipad_mm=arguments.get("antipad_mm"),
+                feed_trace_width_mm=arguments.get("feed_trace_width_mm"),
+                feed_target_z0_ohms=arguments.get("feed_target_z0_ohms", 50.0),
+                reference_planes=arguments.get("reference_planes", 1),
             )
         else:
             result = {"success": False, "error": f"Unknown tool: {name}"}
